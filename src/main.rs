@@ -21,20 +21,10 @@ fn main() {
     let output_path = "received_image.png";  // Path to save the received image
     
     // Spawn the sender thread
-    let sender_thread = thread::spawn(move || {
-        if let Err(e) = sender::send_image_over_udp(&image_path, dest_ip, port) {
+
+    if let Err(e) = sender::send_image_over_udp(&image_path, dest_ip, port) {
             eprintln!("Failed to send image: {}", e);
         }
-    });
 
-    // Spawn the receiver thread
-    let receiver_thread = thread::spawn(move || {
-        if let Err(e) = receiver::listen_for_image(port, output_path) {
-            eprintln!("Failed to receive image: {}", e);
-        }
-    });
 
-    // Wait for both threads to finish
-    sender_thread.join().expect("Sender thread panicked");
-    receiver_thread.join().expect("Receiver thread panicked");
 }
