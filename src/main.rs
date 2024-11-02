@@ -1,22 +1,45 @@
-mod encode;
-mod decode;
+use std::fs;
+use std::io;
+use std::path::Path;
+use tokio::net::UdpSocket;
+mod communication;
 
-use std::error::Error;
+#[tokio::main]
+async fn main() -> io::Result<()> {
+    let socket = UdpSocket::bind("0.0.0.0:0").await?;
+    let directory_path = "/home/group05-f24/Desktop/Amr's Work/Images_dir";
+    let dest_ip = "127.0.0.1";
+    let request_port = 8080;
 
-fn main() -> Result<(), Box<dyn Error>> {
-    // Paths to images
-    let cover_path = "default.jpg";
-    let hidden_path = "test.jpg";
-    let output_path = "encoded_cover.png";
-    let decoded_hidden_path = "decoded_hidden.png";
+    // Send initial request to server
+    let server_addr = format!("{}:{}", dest_ip, request_port);
+    let mut buffer = [0u8; 2];
+    socket.send_to(b"REQUEST", &server_addr).await?;
+    println!("Sent request to server to send images");
 
-    // Encode hidden image
-    encode::encode_image(cover_path, hidden_path, output_path)?;
-    println!("Hidden image encoded successfully into {}", output_path);
+    // Receive assigned port from server
+    let (size, _) = socket.recv_from(&mut buffer).await?;
+    if size == 2 {
+        let port = u16::from_be_bytes([buffer[0], buffer[1]]);
+        println!("Server assigned port: {}", port);
 
-    // Decode hidden image
-    decode::decode_image(output_path, decoded_hidden_path)?;
-    println!("Hidden image decoded successfully to {}", decoded_hidden_path);
+        // Iterate over images in the directory and send them
+        for entry in fs::read_dir(directory_path)? {
+            let image_path = entry?.path();
+            let server_addr = format!("{}:{}", dest_ip, port);
+
+            // Send image to server
+            communication::send_image_over_udp(&socket, &image_path, &dest_ip, port).await?;
+            println!("Image sent to server");
+
+            // Receive encrypted image response
+            let save_path = Path::new("../received_images/encrypted_image_received.png");
+            communication::receive_encrypted_image(&socket, save_path).await?;
+            println!("Encrypted image received and saved at {:?}", save_path);
+        }
+    } else {
+        eprintln!("Failed to receive valid port from server");
+    }
 
     Ok(())
 }
