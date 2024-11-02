@@ -1,0 +1,1 @@
+/home/mario/Desktop/DS/Project/election/target/debug/election: /home/mario/Desktop/DS/Project/election/src/config.rs /home/mario/Desktop/DS/Project/election/src/main.rs /home/mario/Desktop/DS/Project/election/src/server.rs
