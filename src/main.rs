@@ -3,6 +3,7 @@ use std::io;
 use std::path::Path;
 use tokio::net::UdpSocket;
 mod communication;
+mod decode;
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
@@ -36,9 +37,18 @@ async fn main() -> io::Result<()> {
             let save_path = Path::new("../received_images/encrypted_image_received.png");
             communication::receive_encrypted_image(&socket, save_path).await?;
             println!("Encrypted image received and saved at {:?}", save_path);
+
+            // Decode the encrypted image after receiving each one
+            let decode_path :&str = "../received_images/encrypted_image_received.png";
+            let save_decoded :&str= "../received_images/decrypted_image_received.png";
+
+            match decode::decode_image(&decode_path, &save_decoded) {
+                Ok(_) => println!("Decoded image saved at {:?}", save_decoded),
+                Err(e) => eprintln!("Failed to decode image: {}", e),
+            }
         }
     } else {
-        eprintln!("Failed to receive valid port from server");
+        eprintln!("Failed to receive a valid port from server");
     }
 
     Ok(())
