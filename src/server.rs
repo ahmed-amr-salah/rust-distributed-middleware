@@ -82,25 +82,7 @@ pub async fn process_client_request(
         }
     }
 
-    // // Find the highest priority among all peers, choosing the highest SocketAddr in case of a tie
-    // let (highest_priority, highest_priority_server) = state
-    //     .peer_priorities
-    //     .iter()
-    //     .max_by(|&(addr1, &priority1), &(addr2, &priority2)| {
-    //         priority1
-    //             .partial_cmp(&priority2)
-    //             .unwrap_or(std::cmp::Ordering::Equal)
-    //             // In case of equal priority, select the highest SocketAddr
-    //             .then_with(|| addr1.cmp(addr2).reverse())
-    //     })
-    //     .map(|(addr, &priority)| (priority, addr))
-    //     .unwrap_or((server_priority, &server_addr)); // Fallback to the server's own priority if no peers
-
-
-
-
     // Determine if the current server should be the coordinator
-    // println!("HEEEEEEEEEEEEEEEEERE----------->{},{}", server_addr, *highest_priority_server);
     if(highest_priority_server == server_addr)
     {
         // Add request ID to the queue as it is being processed
@@ -154,13 +136,21 @@ pub async fn handle_coordinator_notification(
     stats: Arc<Mutex<ServerStats>>,
 ) {
     let mut state = stats.lock().await;
-    if state.client_request_queue.remove(&request_id) {
+
+    // Add the request ID to the queue
+    if state.client_request_queue.insert(request_id.clone()) {
         println!(
-            "Request ID: {} removed from queue as another server is handling it as coordinator",
+            "Request ID: {} added to queue as this server acknowledges handling it.",
+            request_id
+        );
+    } else {
+        println!(
+            "Request ID: {} was already in the queue.",
             request_id
         );
     }
 }
+
 
 // Function to simulate handling the client request
 async fn handle_request(request_id: String) {
