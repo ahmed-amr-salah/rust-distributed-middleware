@@ -13,8 +13,7 @@ rand = "0.8"
 serde = { version = "1.0.214", features = ["derive"]}
 serde_derive = "1.0.214"
 serde_json = "1.0.132"
-tokio = { version = "1.41.0", features = ["full"] }
-rand = "0.8.5"
 sysinfo = "0.29.10"
 serde_cbor = "0.11.2"
 futures = "*"
+md5 = "*"

@@ -16,6 +16,7 @@ pub struct ServerStats {
 }
 
 // Function to handle incoming heartbeat messages
+// Function to handle incoming heartbeat messages
 pub async fn handle_heartbeat(
     sender_addr: SocketAddr,
     priority: f32,
@@ -24,19 +25,20 @@ pub async fn handle_heartbeat(
     let mut state = stats.lock().await;
 
     // Only add/update the priority if the sender is a peer (not the server itself)
-    if sender_addr != state.self_addr { // Assuming `server_addr` is the address of this server
+    if sender_addr != state.self_addr {
         state.peer_priorities.insert(sender_addr, priority);
-        // println!(
-        //     "Received heartbeat from {} with priority {:.3}",
-        //     sender_addr, priority
-        // );
+        println!(
+            "Updated priority from server {}: priority = {:.3}",
+            sender_addr, priority
+        );
     }
 
-    // for (addr, prio) in &state.peer_priorities {
-    //     println!("Address: {}, Priority: {:.3}", addr, prio);
-    // }
-
+    // Optional: Debug output to log the current state of peer priorities
+    for (addr, prio) in &state.peer_priorities {
+        println!("Peer Address: {}, Priority: {:.3}", addr, prio);
+    }
 }
+
 
 
 pub async fn process_client_request(
@@ -44,7 +46,7 @@ pub async fn process_client_request(
     request_id: String,
     server_socket: Arc<UdpSocket>,
     stats: Arc<Mutex<ServerStats>>,
-) {
+) -> bool {
     let mut state = stats.lock().await;
 
     // Check if the request has already been processed
@@ -53,7 +55,7 @@ pub async fn process_client_request(
             "[Server {}] Request ID: {} already handled or is currently being handled.",
             id, request_id
         );
-        return;
+        return false;
     }
 
     // Clone necessary values from `state` while the lock is held
@@ -61,12 +63,7 @@ pub async fn process_client_request(
     let server_priority = state.pr;
     let peer_nodes = state.peer_nodes.clone(); // Clone peers to use outside the lock
 
-    // println!("Peer priorities and addresses:");
-    for (addr, priority) in &state.peer_priorities {
-        println!("Address: {}, Priority: {:.3}", addr, priority);
-    }
-
-
+    // Evaluate peer priorities and determine if this server is the highest priority
     let mut highest_priority = server_priority;
     let mut highest_priority_server = server_addr;
     for (addr, &priority) in &state.peer_priorities {
@@ -83,8 +80,7 @@ pub async fn process_client_request(
     }
 
     // Determine if the current server should be the coordinator
-    if(highest_priority_server == server_addr)
-    {
+    if highest_priority_server == server_addr {
         // Add request ID to the queue as it is being processed
         state.client_request_queue.insert(request_id.clone());
         drop(state); // Release lock to allow other operations while processing
@@ -102,7 +98,7 @@ pub async fn process_client_request(
                 msg_type: MessageType::CoordinatorNotification(request_id.clone()),
                 payload: None,
             };
-            let encoded_msg = serde_cbor::ser::to_vec(&coordinator_msg).unwrap();
+            let encoded_msg = serde_cbor::to_vec(&coordinator_msg).unwrap();
             let socket_clone = server_socket.clone();
             let rid = request_id.clone();
 
@@ -115,45 +111,35 @@ pub async fn process_client_request(
             });
         }
 
-        // Handle client request directly
-        handle_request(request_id.clone()).await;
-
-        // Remove request ID from queue after handling
-        let mut state = stats.lock().await;
-        state.client_request_queue.remove(&request_id);
+        // This server is the coordinator
+        true
     } else {
+        // This server is not the coordinator
         println!(
             "[Server {}] Not the coordinator for request ID: {}. My priority: {:.3}, Highest priority: {:.3}, Highest priority server IP: {}",
             id, request_id, server_priority, highest_priority, highest_priority_server
         );
+        false
     }
 }
 
 
-// Function to process a coordinator notification from another server
 pub async fn handle_coordinator_notification(
     request_id: String,
     stats: Arc<Mutex<ServerStats>>,
 ) {
     let mut state = stats.lock().await;
 
-    // Add the request ID to the queue
+    // Insert the request ID into the queue to mark it as being handled by the coordinator
     if state.client_request_queue.insert(request_id.clone()) {
         println!(
-            "Request ID: {} added to queue as this server acknowledges handling it.",
+            "Request ID: {} added to queue, as it is being handled by the coordinator.",
             request_id
         );
     } else {
         println!(
-            "Request ID: {} was already in the queue.",
+            "Request ID: {} was already in the queue, no duplicate insertion.",
             request_id
         );
     }
-}
-
-
-// Function to simulate handling the client request
-async fn handle_request(request_id: String) {
-    println!("[Coordinator] Handling request with ID: {}", request_id);
-    // Add any request handling logic here, such as processing data or responding to the client
 }

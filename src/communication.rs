@@ -1,20 +1,53 @@
-use std::collections::HashMap;
+use tokio::sync::Mutex; // Use tokio's async Mutex
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{self, Write};
+use std::net::{SocketAddr, UdpSocket as StdUdpSocket};
 use std::path::Path;
-use std::sync::{Arc, Mutex};
-use std::collections::HashSet;
+use std::sync::Arc;
 use tokio::net::UdpSocket;
-use std::net::UdpSocket as StdUdpSocket;
-use std::net::SocketAddr;
-use tokio::time::{timeout, Duration ,sleep};
+use tokio::time::{timeout, Duration};
 use rand::Rng;
-use std::thread;
 use crate::encode::encode_image;
 
+const ENCODING_IMAGE: &str = "../Encryption-images/default.jpg";
 
-const encodingImage: &str = "/home/group05-f24/Desktop/Amr's Work/Encryption-images/default.jpg";
+/// Attempts to allocate a unique port in the range 9000-9999, checking if it's available by binding to it temporarily.
+pub async fn allocate_unique_port(used_ports: &Arc<Mutex<HashSet<u16>>>) -> io::Result<u16> {
+    let mut used_ports = used_ports.lock().await;
 
+    for port in 12345..25000{
+        if used_ports.contains(&port) {
+            println!("The port {} is already marked as used in the application.", port);
+            continue;
+        }
+
+        let addr = SocketAddr::from(([0, 0, 0, 0], port));
+        match StdUdpSocket::bind(addr) {
+            Ok(socket) => {
+                drop(socket); // Release the socket to free the port
+                used_ports.insert(port); // Mark the port as used
+                println!("Port {} is available and allocated.", port);
+                return Ok(port);
+            }
+            Err(e) if e.kind() == io::ErrorKind::AddrInUse => {
+                println!("Port {} is in use by another process.", port);
+                continue;
+            }
+            Err(e) => {
+                return Err(io::Error::new(io::ErrorKind::Other, format!("Failed to check port {}: {}", port, e)));
+            }
+        }
+    }
+
+    Err(io::Error::new(io::ErrorKind::AddrNotAvailable, "No available ports"))
+}
+
+/// Free a port after transmission completes
+pub async fn free_port(used_ports: &Arc<Mutex<HashSet<u16>>>, port: u16) {
+    let mut used_ports = used_ports.lock().await;
+    used_ports.remove(&port);
+}
 
 /// Sends an image to the specified destination IP and port.
 pub async fn send_image_over_udp(socket: &UdpSocket, image_path: &Path, dest_ip: &str, port: u16) -> io::Result<()> {
@@ -77,16 +110,14 @@ pub fn save_image_from_chunks(path: &str, chunks: &HashMap<usize, Vec<u8>>) -> i
 pub async fn receive_image_over_udp(socket: &UdpSocket) -> io::Result<(HashMap<usize, Vec<u8>>, SocketAddr)> {
     let mut buffer = [0u8; 1024];
     let mut chunks = HashMap::new();
-    let mut client_addr = None;
 
     loop {
         let (size, src) = socket.recv_from(&mut buffer).await?;
-        client_addr = Some(src);
 
         // End-of-transmission signal: check for empty packet and stop receiving
         if size == 0 {
             println!("End of transmission signal received from {}", src);
-            break;
+            return Ok((chunks, src));
         }
 
         // Handle the chunk if it's a valid data packet
@@ -103,30 +134,17 @@ pub async fn receive_image_over_udp(socket: &UdpSocket) -> io::Result<(HashMap<u
             println!("Received malformed or incomplete packet from {}", src);
         }
     }
-
-    Ok((chunks, client_addr.unwrap()))
 }
 
 /// Sends the encrypted image back to the client, chunked into packets.
 pub async fn send_encrypted_image_back(socket: &UdpSocket, client_addr: SocketAddr, image_data: &[u8]) -> io::Result<()> {
     let chunk_size = 1024;
     let delay = Duration::from_millis(3);
-    // Retrieve the local address of the socket
-    let local_addr = socket.local_addr()?;
-
-// Print a message including the client address and socket's IP and port
-    println!(
-    "Encrypted image sent back to client {} on socket {}:{}",
-    client_addr,
-    local_addr.ip(),
-    local_addr.port()
-    );
-
 
     for (i, chunk) in image_data.chunks(chunk_size).enumerate() {
         socket.send_to(chunk, client_addr).await?;
         println!("Sent encrypted chunk {} to client {}", i, client_addr);
-        std::thread::sleep(delay);
+        tokio::time::sleep(delay).await;
     }
 
     // Send end-of-transmission signal
@@ -134,65 +152,22 @@ pub async fn send_encrypted_image_back(socket: &UdpSocket, client_addr: SocketAd
     Ok(())
 }
 
-
-/// Attempts to allocate a unique port in the range 9000-9999, checking if it's available by binding to it temporarily.
-pub fn allocate_unique_port(used_ports: &Arc<Mutex<HashSet<u16>>>) -> io::Result<u16> {
-    let mut used_ports = used_ports.lock().unwrap();
-
-    for port in 9000..9999 {
-        // Check if the port is already marked as used in the application
-        if used_ports.contains(&port) {
-            println!("The port {} is already marked as used in the application.", port);
-            continue;
-        }
-
-        // Try binding to the port with `std::net::UdpSocket` to check if it's available
-        let addr = SocketAddr::from(([0, 0, 0, 0], port));
-        match StdUdpSocket::bind(addr) {
-            Ok(socket) => {
-                // If binding was successful, release the socket and mark the port as used
-                drop(socket); // Close the socket to free the port
-                used_ports.insert(port);
-                println!("Port {} is available and allocated.", port);
-                return Ok(port);
-            }
-            Err(e) if e.kind() == io::ErrorKind::AddrInUse => {
-                println!("Port {} is in use by another process.", port);
-                continue;
-            }
-            Err(e) => {
-                return Err(io::Error::new(io::ErrorKind::Other, format!("Failed to check port {}: {}", port, e)));
-            }
-        }
-    }
-
-    Err(io::Error::new(io::ErrorKind::AddrNotAvailable, "No available ports"))
-}
-
-
-/// Free a port after transmission completes
-pub fn free_port(used_ports: &Arc<Mutex<HashSet<u16>>>, port: u16) {
-    let mut used_ports = used_ports.lock().unwrap();
-    used_ports.remove(&port);
-}
-
-pub async fn handle_client(socket: UdpSocket, client_addr: SocketAddr) -> io::Result<()> {
-    // Receive image data from the client
+pub async fn handle_client(socket: Arc<UdpSocket>, client_addr: SocketAddr) -> io::Result<()> {
     let (chunks, _) = receive_image_over_udp(&socket).await?;
 
     // Save the received image
-    let image_path = "/home/group05-f24/Desktop/Amr's Work/images/received_image.jpg";
+    let image_path = "../images/received_image.jpg";
     save_image_from_chunks(image_path, &chunks)?;
     println!("Image saved at {}", image_path);
-    let random_id: u32 = rand::thread_rng().gen_range(1000..10000);
-    let encoded_image: &str = &format!("/home/group05-f24/Desktop/Amr's Work/Encryption-images/encoded_cover{}.png", random_id);
-    // Call the encoding function and map its error type to io::Error
 
-    encode_image(encodingImage, image_path, encoded_image)
-    .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
-    // Encrypt and send the image back
- 
-    let encrypted_image_data = std::fs::read(encoded_image)?;
+    let random_id: u32 = rand::thread_rng().gen_range(1000..10000);
+    let encoded_image = format!("../Encryption-images/encoded_cover{}.png", random_id);
+
+    // Encode the image
+    encode_image(ENCODING_IMAGE, image_path, &encoded_image)
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+
+    let encrypted_image_data = fs::read(&encoded_image)?;
     send_encrypted_image_back(&socket, client_addr, &encrypted_image_data).await?;
     println!("Encrypted image sent back to client {}", client_addr);
 
