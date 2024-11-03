@@ -1,0 +1,1 @@
+/home/mario/Documents/GitHub/rust-distributed-middleware/target/debug/rust-distributed-middleware: /home/mario/Documents/GitHub/rust-distributed-middleware/src/communication.rs /home/mario/Documents/GitHub/rust-distributed-middleware/src/decode.rs /home/mario/Documents/GitHub/rust-distributed-middleware/src/main.rs
