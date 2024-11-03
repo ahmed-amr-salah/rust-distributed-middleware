@@ -5,7 +5,7 @@ use tokio::net::UdpSocket;
 use tokio::time::{timeout, Duration};
 
 /// Sends an image to the specified destination IP and port in chunks.
-pub async fn send_image_over_udp(socket: &UdpSocket, image_path: &Path, dest_ip: &str, port: u16) -> io::Result<()> {
+pub async fn send_image_over_udp(socket: &UdpSocket, image_path: &Path, dest_ip: String, port: u16) -> io::Result<()> {
     let image_data = fs::read(image_path)?;
     let chunk_size = 1024;
     let id_size = 4;
@@ -18,7 +18,7 @@ pub async fn send_image_over_udp(socket: &UdpSocket, image_path: &Path, dest_ip:
         packet.extend_from_slice(chunk);
 
         loop {
-            socket.send_to(&packet, (dest_ip, port)).await?;
+            socket.send_to(&packet, (dest_ip.as_str(), port)).await?;
             println!("Sent chunk {}/{}", i + 1, total_chunks);
 
             let mut ack_buf = [0u8; 4];
@@ -39,7 +39,8 @@ pub async fn send_image_over_udp(socket: &UdpSocket, image_path: &Path, dest_ip:
         }
     }
 
-    socket.send_to(&[], (dest_ip, port)).await?;
+    // Send an empty packet to indicate the end of transmission
+    socket.send_to(&[], (dest_ip.as_str(), port)).await?;
     println!("Finished sending image {:?}", image_path.file_name());
 
     Ok(())
@@ -62,6 +63,7 @@ pub async fn receive_encrypted_image(socket: &UdpSocket, save_path: &Path) -> io
 
         // Store the received data chunk
         received_chunks.push(buffer[..size].to_vec());
+        println!("Received chunk with size {} bytes", size);
     }
 
     save_image_from_chunks(save_path, &received_chunks)?;
@@ -74,8 +76,9 @@ pub async fn receive_encrypted_image(socket: &UdpSocket, save_path: &Path) -> io
 fn save_image_from_chunks(path: &Path, chunks: &[Vec<u8>]) -> io::Result<()> {
     let mut file = fs::File::create(path)?;
 
-    for chunk in chunks {
+    for (i, chunk) in chunks.iter().enumerate() {
         file.write_all(chunk)?;
+        println!("Saved chunk {} to file", i + 1);
     }
 
     Ok(())
