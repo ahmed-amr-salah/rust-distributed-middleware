@@ -3,6 +3,8 @@ use tokio::sync::Mutex;
 use std::sync::Arc;
 use std::net::SocketAddr;
 use std::collections::{HashMap, HashSet};
+use std::time::{Duration, SystemTime};
+use std::thread::sleep;
 
 use crate::config::{Message, MessageType};
 
@@ -13,6 +15,7 @@ pub struct ServerStats {
     pub client_request_queue: HashSet<String>, // Queue of pending client requests for this server
     pub peer_nodes: Vec<SocketAddr>, // List of peer nodes
     pub is_active: bool, // Whether the server is active
+    pub peer_alive: HashMap<SocketAddr, SystemTime>,
 }
 
 // Function to handle incoming heartbeat messages
@@ -27,10 +30,12 @@ pub async fn handle_heartbeat(
     // Only add/update the priority if the sender is a peer (not the server itself)
     if sender_addr != state.self_addr {
         state.peer_priorities.insert(sender_addr, priority);
-        // println!(
-        //     "Updated priority from server {}: priority = {:.3}",
-        //     sender_addr, priority
-        // );
+        println!(
+            "Updated priority from server {}: priority = {:.3}",
+            sender_addr, priority
+        );
+
+        state.peer_alive.insert(sender_addr, SystemTime::now());
     }
 
     // // Optional: Debug output to log the current state of peer priorities
