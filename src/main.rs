@@ -24,14 +24,19 @@ use server::{ServerStats, process_client_request, handle_heartbeat, handle_coord
 const SERVER_ID: u32 = 1;          // Modify this for each server instance
 const HEARTBEAT_PORT: u16 = 8085;   // Port for both sending and receiving heartbeat messages
 
+
+// Declare `used_ports` as a global, shared state outside `main`
+lazy_static::lazy_static! {
+    static ref used_ports: Arc<tokio::sync::Mutex<HashSet<u16>>> = Arc::new(Mutex::new(HashSet::new()));
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let used_ports: Arc<tokio::sync::Mutex<HashSet<u16>>> = Arc::new(Mutex::new(HashSet::new()));
-    let client_port = communication::allocate_unique_port(&used_ports).await?;
-    let local_addr: SocketAddr = "127.0.0.1:8082".parse().unwrap();
+    // let client_port = communication::allocate_unique_port(&used_ports).await?;
+    let local_addr: SocketAddr = "10.7.19.204:8080".parse().unwrap();
     let peer_addresses = vec![
-        "127.0.0.1:8085".parse().unwrap(),
-        "127.0.0.1:8085".parse().unwrap(),
+        "10.40.61.237:8085".parse().unwrap(),
+        // "127.0.0.1:8085".parse().unwrap(),
     ];
 
     let stats = Arc::new(Mutex::new(ServerStats {
@@ -68,27 +73,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // Main loop to handle client requests
-    let used_ports = Arc::new(Mutex::new(HashSet::<u16>::new())); // Track used ports for clients
+    // let used_ports = Arc::new(Mutex::new(HashSet::<u16>::new())); // Track used ports for clients
 
     loop {
+        let client_port = communication::allocate_unique_port(&used_ports).await?; //Mario
+        let client_socket = Arc::new(UdpSocket::bind(("0.0.0.0", client_port)).await?); //Mario
+
         let mut buffer = [0u8; 1024];
         let (size, client_addr) = listen_socket.recv_from(&mut buffer).await?;
-
+        
         if size == 0 {
             println!("Received empty request from {}", client_addr);
+            communication::free_port(&used_ports, client_port).await;
             continue;
         }
-
+        
         println!("Received request from client {}", client_addr);
-
-        let client_socket = Arc::new(UdpSocket::bind(("0.0.0.0", client_port)).await?);
+        
+        // let client_socket = Arc::new(UdpSocket::bind(("0.0.0.0", client_port)).await?);
+        println!("---------------------> {}", client_port);
         listen_socket.send_to(&client_port.to_be_bytes(), client_addr).await?;
         println!("Allocated port {} for client {}", client_port, client_addr);
 
         let request_id = format!(
             "{}-{}-{:x}", 
             client_addr.ip(),
-            client_port,
+            client_addr.port(),
             md5::compute(&buffer[..size]) // Ensure request ID is unique
         );
 
@@ -122,16 +132,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Only add/update the priority if the sender is a peer (not the server itself)
                 if sender_addr != state.self_addr { // Assuming `server_addr` is the address of this server
                     state.peer_priorities.insert(sender_addr, priority);
-                    // println!(
-                    //     "Received heartbeat from {} with priority {:.3}",
-                    //     sender_addr, priority
-                    // );
-                }
-            
-                // for (addr, prio) in &state.peer_priorities {
-                //     println!("Address: {}, Priority: {:.3}", addr, prio);
-                // }
-            
+                }    
             }
         });
         
