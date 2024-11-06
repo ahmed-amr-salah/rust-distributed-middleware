@@ -14,15 +14,18 @@ async fn main() -> io::Result<()> {
     dotenv().ok();
     
     let socket = UdpSocket::bind("0.0.0.0:0").await?;
-    let directory_path = std::var("IMAGE_DIR");
-    let request_port = std::var("LISTENING_PORT");
+    let directory_path = env::var("IMAGE_DIR").expect("IMAGE_DIR is not set in .env");
+    let request_port = env::var("LISTENING_PORT").expect("LISTENING_PORT is not set in .env");
 
     // Define the IPs and request port for the three servers
-    let server_ips = [std::var("FIRST_SERVER_IP"), std::var("SECOND_SERVER_IP")];
+    let server_ips = [
+        env::var("FIRST_SERVER_IP").expect("FIRST_SERVER_IP is not set in .env"),
+        env::var("SECOND_SERVER_IP").expect("SECOND_SERVER_IP is not set in .env"),
+    ];    
     let mut buffer = [0u8; 2];
 
     // Send "REQUEST" message to all three servers
-    for &server_ip in &server_ips {
+    for server_ip in &server_ips {
         let server_addr = format!("{}:{}", server_ip, request_port);
         socket.send_to(b"REQUEST", &server_addr).await?;
         println!("Sent request to server at {}", server_addr);
