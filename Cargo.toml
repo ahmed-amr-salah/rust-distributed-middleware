@@ -9,3 +9,4 @@ uuid = { version = "1.2", features = ["v4"] }
 tokio = { version = "1", features = ["full"] }
 steganography = "*"
 image = "0.21"
+dotenv = "0.15" 

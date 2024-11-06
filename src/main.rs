@@ -3,17 +3,22 @@ use std::io;
 use std::path::Path;
 use tokio::net::UdpSocket;
 use tokio::time::{timeout, Duration};
+use dotenv::dotenv;
+use std::env;
 mod communication;
 mod decode;
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
+    // LOAD THE LOCAL VARIABLE
+    dotenv().ok();
+    
     let socket = UdpSocket::bind("0.0.0.0:0").await?;
-    let directory_path = "/home/g6/Desktop/Hamza's_Work/dist3/Images_dir";
-    let request_port = 8080;
+    let directory_path = std::var("IMAGE_DIR");
+    let request_port = std::var("LISTENING_PORT");
 
     // Define the IPs and request port for the three servers
-    let server_ips = ["10.40.61.237", "10.7.19.204"];
+    let server_ips = [std::var("FIRST_SERVER_IP"), std::var("SECOND_SERVER_IP")];
     let mut buffer = [0u8; 2];
 
     // Send "REQUEST" message to all three servers
