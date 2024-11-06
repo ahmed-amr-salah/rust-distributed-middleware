@@ -76,15 +76,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // let used_ports = Arc::new(Mutex::new(HashSet::<u16>::new())); // Track used ports for clients
 
     loop {
-        let client_port = communication::allocate_unique_port(&used_ports).await?; //Mario
-        let client_socket = Arc::new(UdpSocket::bind(("0.0.0.0", client_port)).await?); //Mario
-
+        //let client_port = communication::allocate_unique_port(&used_ports).await?; //Mario
+        let client_socket = Arc::new(UdpSocket::bind("0.0.0.0:0").await?); //Mario
+        let client_port = client_socket.local_addr()?.port();
+         
         let mut buffer = [0u8; 1024];
         let (size, client_addr) = listen_socket.recv_from(&mut buffer).await?;
         
         if size == 0 {
             println!("Received empty request from {}", client_addr);
-            communication::free_port(&used_ports, client_port).await;
+            //communication::free_port(&used_ports, client_port).await;
             continue;
         }
         
@@ -119,7 +120,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     eprintln!("Error handling client {}: {}", client_addr, e);
                 }
                 // Free the port after transmission
-                communication::free_port(&used_ports_clone, client_port);
+                //communication::free_port(&used_ports_clone, client_port);
             } else {
                 println!("Another server will handle the request {}", request_id);
             }pub async fn handle_heartbeat(
