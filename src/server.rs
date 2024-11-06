@@ -30,10 +30,10 @@ pub async fn handle_heartbeat(
     // Only add/update the priority if the sender is a peer (not the server itself)
     if sender_addr != state.self_addr {
         state.peer_priorities.insert(sender_addr, priority);
-        println!(
-            "Updated priority from server {}: priority = {:.3}",
-            sender_addr, priority
-        );
+        // println!(
+        //     "Updated priority from server {}: priority = {:.3}",
+        //     sender_addr, priority
+        // );
 
         state.peer_alive.insert(sender_addr, SystemTime::now());
     }
