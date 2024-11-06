@@ -35,15 +35,15 @@ const HEARTBEAT_PERIOD: u64 = 3;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // let client_port = communication::allocate_unique_port(&used_ports).await?;
-    let local_addr: SocketAddr = "10.7.19.18:8080".parse().unwrap();
+    let local_addr: SocketAddr = "10.7.19.18:8081".parse().unwrap();
     let peer_addresses = vec![
-        "10.40.61.237:8085".parse().unwrap(),
+        "10.7.19.204:8085".parse().unwrap(),
         // "127.0.0.1:8085".parse().unwrap(),
     ];
 
     let stats = Arc::new(Mutex::new(ServerStats {
         self_addr: local_addr,
-        pr: 0.0,
+        pr: -1.0,
         peer_priorities: HashMap::new(),
         client_request_queue: HashSet::new(),
         peer_nodes: peer_addresses.clone(),
@@ -176,17 +176,27 @@ async fn listen_for_heartbeats(heartbeat_socket: Arc<UdpSocket>, stats: Arc<Mute
 }
 
 // Function to send heartbeat messages to peers on HEARTBEAT_PORT
+
 async fn send_heartbeat(heartbeat_socket: Arc<UdpSocket>, stats: Arc<Mutex<ServerStats>>) {
     let mut system = System::new_all();
     system.refresh_cpu();
     let load_average = system.load_average().one;
     let priority = 1.0 / load_average as f32;
 
-    let mut state = stats.lock().await;
-    state.pr = priority;
+    // Gather and update stats in a single lock scope
+    let (self_addr, peer_nodes, peer_alive) = {
+        let mut state = stats.lock().await;
+        state.pr = priority;
+        state.peer_priorities.retain(|_, &mut prio| prio != -1.0); // Remove any offline peers
+        (
+            state.self_addr,
+            state.peer_nodes.clone(),  // Clone peer nodes to avoid locking while iterating
+            state.peer_alive.clone(),  // Clone peer last alive times
+        )
+    };
 
     let heartbeat_msg = config::Message {
-        sender: state.self_addr,
+        sender: self_addr,
         receiver: "0.0.0.0:0".parse().unwrap(),
         msg_type: config::MessageType::Heartbeat(priority),
         payload: None,
@@ -194,23 +204,32 @@ async fn send_heartbeat(heartbeat_socket: Arc<UdpSocket>, stats: Arc<Mutex<Serve
 
     let encoded_msg = serde_cbor::to_vec(&heartbeat_msg).unwrap();
 
-    for &peer_addr in &state.peer_nodes {         
-        let peer_heartbeat_addr = SocketAddr::new(peer_addr.ip(), HEARTBEAT_PORT);
-        heartbeat_socket.send_to(&encoded_msg, peer_heartbeat_addr).await.unwrap();
-
-        // Calculate the elapsed time since the peer was last seen alive
-        if let Some(last_alive_time) = state.peer_alive.get(&peer_addr) {
-            let elapsed = last_alive_time.duration_since(SystemTime::now());
-
-            // Check if the elapsed time is greater than or equal to 1.5 * HEARTBEAT_PERIOD
-            if let Ok(duration) = elapsed {
-                if duration >= Duration::from_secs((2 * HEARTBEAT_PERIOD) as u64) {
-                    let mut state = stats.lock().await;
+    for &peer_addr in &peer_nodes {     
+        // Check the last alive time for each peer without locking again
+        let mut state = stats.lock().await;
+        // if let Some(&priority) = state.peer_priorities.get(&peer_addr) {
+        //     if priority <= 0.0 {
+        //         continue;
+        //     }
+        // }        
+        if let Some(last_alive_time) = peer_alive.get(&peer_addr) {
+            if let Ok(duration) = SystemTime::now().duration_since(*last_alive_time) {
+                if duration >= Duration::from_secs((3 * HEARTBEAT_PERIOD) / 2) {
                     state.peer_priorities.insert(peer_addr, -1.0);
+                    // println!("Updated priority for {}: {:?}", peer_addr, state.peer_priorities.get(&peer_addr));
                 }
             }
+        }
+
+        let peer_heartbeat_addr = SocketAddr::new(peer_addr.ip(), HEARTBEAT_PORT);
+        
+        // Send heartbeat
+        if let Err(e) = heartbeat_socket.send_to(&encoded_msg, peer_heartbeat_addr).await {
+            eprintln!("Failed to send heartbeat to {}: {:?}", peer_heartbeat_addr, e);
+            continue;
         }
 
         println!("Sent heartbeat to {}", peer_heartbeat_addr);
     }
 }
+
