@@ -16,7 +16,7 @@ const ENCODING_IMAGE: &str = "../Encryption-images/default.jpg";
 pub async fn allocate_unique_port(used_ports: &Arc<Mutex<HashSet<u16>>>) -> io::Result<u16> {
     let mut used_ports = used_ports.lock().await;
 
-    for port in 12345..25000{
+    for port in 12348..25000{
         if used_ports.contains(&port) {
             println!("The port {} is already marked as used in the application.", port);
             continue;
@@ -143,7 +143,7 @@ pub async fn send_encrypted_image_back(socket: &UdpSocket, client_addr: SocketAd
 
     for (i, chunk) in image_data.chunks(chunk_size).enumerate() {
         socket.send_to(chunk, client_addr).await?;
-        println!("Sent encrypted chunk {} to client {}", i, client_addr);
+        // println!("Sent encrypted chunk {} to client {}", i, client_addr);
         tokio::time::sleep(delay).await;
     }
 
