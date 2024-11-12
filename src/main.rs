@@ -35,7 +35,7 @@ const HEARTBEAT_PERIOD: u64 = 3;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // let client_port = communication::allocate_unique_port(&used_ports).await?;
-    let local_addr: SocketAddr = "10.7.19.18:8081".parse().unwrap();
+    let local_addr: SocketAddr = "10.40.51.73:8081".parse().unwrap();
     let peer_addresses = vec![
         "10.7.19.204:8085".parse().unwrap(),
         // "127.0.0.1:8085".parse().unwrap(),
