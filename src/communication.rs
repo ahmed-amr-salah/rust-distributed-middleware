@@ -7,10 +7,11 @@ use std::path::Path;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tokio::time::{timeout, Duration};
+use tokio::task;
 use rand::Rng;
-use crate::encode::encode_image;
+use crate::encode::encode_image_async;
 
-const ENCODING_IMAGE: &str = "../Encryption-images/default.jpg";
+const ENCODING_IMAGE: &str = "/home/g6/Desktop/Hamza's_Work/dist4/rust-distributed-middleware/Encryption-images/default.jpg";
 
 /// Attempts to allocate a unique port in the range 9000-9999, checking if it's available by binding to it temporarily.
 pub async fn allocate_unique_port(used_ports: &Arc<Mutex<HashSet<u16>>>) -> io::Result<u16> {
@@ -161,15 +162,18 @@ pub async fn handle_client(socket: Arc<UdpSocket>, client_addr: SocketAddr) -> i
     println!("Image saved at {}", image_path);
 
     let random_id: u32 = rand::thread_rng().gen_range(1000..10000);
-    let encoded_image = format!("../Encryption-images/encoded_cover{}.png", random_id);
+    let encoded_image = format!("/home/g6/Desktop/Hamza's_Work/dist4/rust-distributed-middleware/Encryption-images/encoded_cover{}.png", random_id);
 
-    // Encode the image
-    encode_image(ENCODING_IMAGE, image_path, &encoded_image)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+    // Call the async encoding function and await its completion
+    encode_image_async(ENCODING_IMAGE.to_string(), image_path.to_string(), encoded_image.to_string())
+    .await
+    .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
 
+    // Read and send the encrypted image back to the client
     let encrypted_image_data = fs::read(&encoded_image)?;
     send_encrypted_image_back(&socket, client_addr, &encrypted_image_data).await?;
     println!("Encrypted image sent back to client {}", client_addr);
 
     Ok(())
 }
+
