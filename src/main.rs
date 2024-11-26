@@ -67,9 +67,12 @@ async fn main() -> io::Result<()> {
             let decode_path = "../received_images/encrypted_image_received.png";
             let save_decoded = "../received_images/decrypted_image_received.png";
 
-            match decode::decode_image(decode_path, save_decoded) {
-                Ok(_) => println!("Decoded image saved at {:?}", save_decoded),
-                Err(e) => eprintln!("Failed to decode image: {}", e),
+            match tokio::task::spawn_blocking(move || decode::decode_image(decode_path, save_decoded))
+                .await
+            {
+                Ok(Ok(_)) => println!("Decoded image saved at {:?}", save_decoded),
+                Ok(Err(e)) => eprintln!("Failed to decode image: {}", e),
+                Err(join_err) => eprintln!("Failed to execute decode_image: {:?}", join_err),
             }
         }
     } else {
