@@ -18,3 +18,7 @@ serde_cbor = "0.11.2"
 futures = "*"
 md5 = "*"
 lazy_static = "1.4"
+mysql_async = { version = "0.34.2", features = ["native-tls"] }
+
+[patch.crates-io]
+

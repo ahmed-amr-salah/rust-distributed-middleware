@@ -1,44 +1,41 @@
-use std::net::SocketAddr;
-use tokio::net::UdpSocket;
-use tokio::time::{Duration, sleep};
 use std::collections::{HashMap, HashSet};
-use serde_cbor;
-use std::io;
-use sysinfo::{System, SystemExt};
-use rand::Rng;
-use rand::rngs::StdRng;
-use rand::SeedableRng;
-use tokio::sync::Mutex;
+use std::net::SocketAddr;
 use std::sync::Arc;
-use std::net::UdpSocket as StdUdpSocket;
+use tokio::net::UdpSocket;
+use tokio::sync::Mutex;
+use tokio::time::{Duration, sleep};
+use mysql_async::Pool;
+use sysinfo::{System, SystemExt};
+use serde_cbor;
 use std::time::SystemTime;
-
 
 mod config;
 mod server;
 mod communication;
-mod encode; // Assuming this module includes encryption functions
+mod encode;
 
 use server::{ServerStats, process_client_request, handle_heartbeat, handle_coordinator_notification};
+use communication::{handle_client, handle_client_exit, allocate_unique_port, free_port};
 
 // Constants
-const SERVER_ID: u32 = 1;          // Modify this for each server instance
-const HEARTBEAT_PORT: u16 = 8085;   // Port for both sending and receiving heartbeat messages
+const SERVER_ID: u32 = 1;
+const HEARTBEAT_PORT: u16 = 8085;
 const HEARTBEAT_PERIOD: u64 = 3;
 
-
-// // Declare `used_ports` as a global, shared state outside `main`
-// lazy_static::lazy_static! {
-//     static ref used_ports: Arc<tokio::sync::Mutex<HashSet<u16>>> = Arc::new(Mutex::new(HashSet::new()));
-// }
+// Declare `used_ports` as a global, shared state outside `main`
+lazy_static::lazy_static! {
+    static ref USED_PORTS: Arc<Mutex<HashSet<u16>>> = Arc::new(Mutex::new(HashSet::new()));
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // let client_port = communication::allocate_unique_port(&used_ports).await?;
+    // Initialize database connection pool
+    let db_pool = Arc::new(Pool::new(db_url));
+
+    // Local server setup
     let local_addr: SocketAddr = "10.40.51.73:8081".parse().unwrap();
     let peer_addresses = vec![
         "10.7.19.204:8085".parse().unwrap(),
-        // "127.0.0.1:8085".parse().unwrap(),
     ];
 
     let stats = Arc::new(Mutex::new(ServerStats {
@@ -54,18 +51,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listen_socket = UdpSocket::bind(local_addr).await?;
     println!("Server listening for initial client requests on {}", local_addr);
 
-    // Shared heartbeat socket for sending and receiving on HEARTBEAT_PORT
+    // Shared heartbeat socket
     let heartbeat_socket = Arc::new(UdpSocket::bind(("0.0.0.0", HEARTBEAT_PORT)).await?);
     println!("Server listening for heartbeat messages on port {}", HEARTBEAT_PORT);
 
-    // Start listening for heartbeat messages
+    // Spawn tasks for heartbeat handling
     let stats_clone = Arc::clone(&stats);
     let heartbeat_socket_clone = Arc::clone(&heartbeat_socket);
     tokio::spawn(async move {
         listen_for_heartbeats(heartbeat_socket_clone, stats_clone).await;
     });
 
-    // Start sending heartbeats to peers
     let stats_clone = Arc::clone(&stats);
     let heartbeat_socket_clone = Arc::clone(&heartbeat_socket);
     tokio::spawn(async move {
@@ -75,78 +71,61 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // Main loop to handle client requests
-    // let used_ports = Arc::new(Mutex::new(HashSet::<u16>::new())); // Track used ports for clients
-
+    // Main loop for handling client requests
     loop {
-        // let client_port = communication::allocate_unique_port(&used_ports).await?; //Mario
-        // let client_socket = Arc::new(UdpSocket::bind(("0.0.0.0", client_port)).await?); //Mario
-        let client_socket = Arc::new(UdpSocket::bind("0.0.0.0:0").await?);
-        let client_port = client_socket.local_addr()?.port();
+        let client_port = allocate_unique_port(&USED_PORTS).await?;
+        let client_socket = Arc::new(UdpSocket::bind(("0.0.0.0", client_port)).await?);
 
         let mut buffer = [0u8; 1024];
         let (size, client_addr) = listen_socket.recv_from(&mut buffer).await?;
-        
         if size == 0 {
             println!("Received empty request from {}", client_addr);
-            // communication::free_port(&used_ports, client_port).await;
             continue;
         }
-        
-        println!("Received request from client {}", client_addr);
-        
-        // let client_socket = Arc::new(UdpSocket::bind(("0.0.0.0", client_port)).await?);
-        println!("---------------------> {}", client_port);
+
+        // Notify client of its allocated port
         listen_socket.send_to(&client_port.to_be_bytes(), client_addr).await?;
         println!("Allocated port {} for client {}", client_port, client_addr);
 
-        let request_id = format!(
-            "{}-{}-{:x}", 
-            client_addr.ip(),
-            client_addr.port(),
-            md5::compute(&buffer[..size]) // Ensure request ID is unique
-        );
-
+        // Process client requests
         let stats_clone = Arc::clone(&stats);
-        // let used_ports_clone = Arc::clone(&used_ports);
-        let client_socket_clone = Arc::clone(&client_socket); // Arc clone, not UdpSocket clone
-
+        let client_socket_clone = Arc::clone(&client_socket);
+        let db_pool_for_client = Arc::clone(&db_pool); // Clone for `handle_client`
+        let db_pool_for_exit = Arc::clone(&db_pool); // Clone for `handle_client_exit`
 
         tokio::spawn(async move {
-            // Determine if this server should act as the coordinator for this request
-            let is_coordinator = process_client_request(SERVER_ID, request_id.clone(), client_socket_clone.clone(), stats_clone.clone()).await;
-        
+            // Check if this server is the coordinator
+            let is_coordinator = process_client_request(
+                SERVER_ID,
+                format!("{}-{}-{:x}", client_addr.ip(), client_addr.port(), md5::compute(&buffer[..size])),
+                client_socket_clone.clone(),
+                stats_clone.clone(),
+            )
+            .await;
+
             if is_coordinator {
-                println!("This server is elected as coordinator for request {}", request_id);
-        
-                // Coordinator handles the client by invoking `handle_client`
-                if let Err(e) = communication::handle_client(client_socket_clone, client_addr).await {
+                println!("This server is elected as coordinator for client {}", client_addr);
+
+                // Handle the client
+                if let Err(e) = handle_client(client_socket_clone, client_addr, db_pool_for_client).await {
                     eprintln!("Error handling client {}: {}", client_addr, e);
                 }
-                // Free the port after transmission
-                // communication::free_port(&used_ports_clone, client_port);
-                drop(client_socket);
-                
+
+                // Mark client offline when done
+                if let Err(e) = handle_client_exit(client_addr, db_pool_for_exit).await {
+                    eprintln!("Error marking client {} offline: {}", client_addr, e);
+                }
+
+                // Free the port
+                free_port(&USED_PORTS, client_port).await;
             } else {
-                println!("Another server will handle the request {}", request_id);
-            }pub async fn handle_heartbeat(
-                sender_addr: SocketAddr,
-                priority: f32,
-                stats: &Arc<Mutex<ServerStats>>,
-            ) {
-                let mut state = stats.lock().await;
-            
-                // Only add/update the priority if the sender is a peer (not the server itself)
-                if sender_addr != state.self_addr { // Assuming `server_addr` is the address of this server
-                    state.peer_priorities.insert(sender_addr, priority);
-                }    
+                println!("Another server will handle the request for {}", client_addr);
             }
         });
-        
     }
 }
 
-// Dedicated function to listen for heartbeat messages on HEARTBEAT_PORT
+// Function to listen for heartbeat messages on HEARTBEAT_PORT
 async fn listen_for_heartbeats(heartbeat_socket: Arc<UdpSocket>, stats: Arc<Mutex<ServerStats>>) {
     let mut buffer = [0u8; 1024];
 
@@ -164,7 +143,6 @@ async fn listen_for_heartbeats(heartbeat_socket: Arc<UdpSocket>, stats: Arc<Mute
                     );
                 }
                 config::MessageType::CoordinatorNotification(request_id) => {
-                    // Handle incoming coordinator notifications
                     handle_coordinator_notification(request_id, stats.clone()).await;
                 }
                 _ => {
@@ -176,22 +154,20 @@ async fn listen_for_heartbeats(heartbeat_socket: Arc<UdpSocket>, stats: Arc<Mute
 }
 
 // Function to send heartbeat messages to peers on HEARTBEAT_PORT
-
 async fn send_heartbeat(heartbeat_socket: Arc<UdpSocket>, stats: Arc<Mutex<ServerStats>>) {
     let mut system = System::new_all();
     system.refresh_cpu();
     let load_average = system.load_average().one;
     let priority = 1.0 / load_average as f32;
 
-    // Gather and update stats in a single lock scope
     let (self_addr, peer_nodes, peer_alive) = {
         let mut state = stats.lock().await;
         state.pr = priority;
-        state.peer_priorities.retain(|_, &mut prio| prio != -1.0); // Remove any offline peers
+        state.peer_priorities.retain(|_, &mut prio| prio != -1.0);
         (
             state.self_addr,
-            state.peer_nodes.clone(),  // Clone peer nodes to avoid locking while iterating
-            state.peer_alive.clone(),  // Clone peer last alive times
+            state.peer_nodes.clone(),
+            state.peer_alive.clone(),
         )
     };
 
@@ -204,32 +180,22 @@ async fn send_heartbeat(heartbeat_socket: Arc<UdpSocket>, stats: Arc<Mutex<Serve
 
     let encoded_msg = serde_cbor::to_vec(&heartbeat_msg).unwrap();
 
-    for &peer_addr in &peer_nodes {     
-        // Check the last alive time for each peer without locking again
-        let mut state = stats.lock().await;
-        // if let Some(&priority) = state.peer_priorities.get(&peer_addr) {
-        //     if priority <= 0.0 {
-        //         continue;
-        //     }
-        // }        
+    for &peer_addr in &peer_nodes {
         if let Some(last_alive_time) = peer_alive.get(&peer_addr) {
             if let Ok(duration) = SystemTime::now().duration_since(*last_alive_time) {
                 if duration >= Duration::from_secs((3 * HEARTBEAT_PERIOD) / 2) {
+                    let mut state = stats.lock().await;
                     state.peer_priorities.insert(peer_addr, -1.0);
-                    // println!("Updated priority for {}: {:?}", peer_addr, state.peer_priorities.get(&peer_addr));
                 }
             }
         }
 
         let peer_heartbeat_addr = SocketAddr::new(peer_addr.ip(), HEARTBEAT_PORT);
-        
-        // Send heartbeat
+
         if let Err(e) = heartbeat_socket.send_to(&encoded_msg, peer_heartbeat_addr).await {
             eprintln!("Failed to send heartbeat to {}: {:?}", peer_heartbeat_addr, e);
-            continue;
+        } else {
+            println!("Sent heartbeat to {}", peer_heartbeat_addr);
         }
-
-        println!("Sent heartbeat to {}", peer_heartbeat_addr);
     }
 }
-
