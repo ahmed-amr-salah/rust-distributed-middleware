@@ -59,13 +59,13 @@ async fn main() -> io::Result<()> {
             println!("Image sent to server at {}", server_addr);
 
             // Receive encrypted image response
-            let save_path = Path::new("../received_images/encrypted_image_received.png");
+            let save_path = Path::new("/home/g6/hamza_work/distributed/rust-distributed-middleware/received_images/encrypted_image_received.png");
             communication::receive_encrypted_image(&socket, save_path).await?;
             println!("Encrypted image received and saved at {:?}", save_path);
 
             // Decode the encrypted image after receiving each one
-            let decode_path = "../received_images/encrypted_image_received.png";
-            let save_decoded = "../received_images/decrypted_image_received.png";
+            let decode_path = "/home/g6/hamza_work/distributed/rust-distributed-middleware/received_images/encrypted_image_received.png";
+            let save_decoded = "/home/g6/hamza_work/distributed/rust-distributed-middleware/received_images/decrypted_image_received.png";
 
             match tokio::task::spawn_blocking(move || decode::decode_image(decode_path, save_decoded))
                 .await
@@ -75,6 +75,10 @@ async fn main() -> io::Result<()> {
                 Err(join_err) => eprintln!("Failed to execute decode_image: {:?}", join_err),
             }
         }
+        // Send the "CLIENT_OFFLINE" notification to the server
+        let offline_message = b"CLIENT_OFFLINE";
+        socket.send_to(offline_message, (server_addr.ip().to_string(), port)).await?;
+        println!("Notified server at {}:{} that client is going offline.", server_addr, port);
     } else {
         eprintln!("No server assigned a port. Exiting.");
     }
