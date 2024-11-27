@@ -30,6 +30,7 @@ lazy_static::lazy_static! {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize database connection pool
+
     let db_pool = Arc::new(Pool::new(db_url));
 
     // Local server setup
