@@ -1,145 +1,199 @@
 use std::io::{self, Write};
 use std::path::Path;
+use std::sync::Arc;
 use tokio::net::UdpSocket;
+use tokio::sync::{mpsc, Mutex};
 use serde_json::json;
-use uuid::Uuid; 
+use uuid::Uuid;
+
 mod authentication;
 mod communication;
 mod decode;
 mod encode;
 mod config;
 mod workflow;
+mod p2p;
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
     // Load environment variables and configuration
     let config = config::load_config();
-    let socket = UdpSocket::bind("0.0.0.0:0").await?;
+    let socket = Arc::new(UdpSocket::bind("0.0.0.0:0").await?);
 
-    // Authentication menu
-    println!("Welcome! Please choose an option:");
-    println!("1. Register");
-    println!("2. Sign In");
-    print!("Enter your choice: ");
-    io::stdout().flush()?;
-    
-    let mut choice = String::new();
-    io::stdin().read_line(&mut choice)?;
-    let choice = choice.trim();
+    // Set up channel for peer-to-peer communication
+    let (p2p_tx, mut p2p_rx) = mpsc::channel::<(String, String)>(100);
+    let p2p_socket = Arc::clone(&socket);
 
-    match choice {
-        "1" => {
-            // Registration
-            let auth_json = authentication::create_auth_json(None);
-            let response = authentication::send_auth_request(
-                &socket,
-                &auth_json,
-                &config.server_ips[0],
-                config.request_port,
-            )
-            .await?;
+    // Spawn P2P listener thread
+    tokio::spawn(async move {
+        let mut buffer = [0u8; 1024];
+        loop {
+            if let Ok((size, src)) = p2p_socket.recv_from(&mut buffer).await {
+                let request = String::from_utf8_lossy(&buffer[..size]).to_string();
+                println!("[P2P Listener] Received request: {} from {}", request, src);
 
-            // Handle server response for registration
-            println!("Registration response: {}", response);
-            if response.contains("user_id") {
-                let parsed_response: serde_json::Value = serde_json::from_str(&response)?;
-                if let Some(user_id) = parsed_response["user_id"].as_str() {
-                    authentication::save_user_id(user_id, Path::new("user.json"))?;
-                } else {
-                    eprintln!("Error: Failed to retrieve user_id from response.");
+                // Forward request to the main thread via the channel
+                if let Err(e) = p2p_tx.send((src.to_string(), request)).await {
+                    eprintln!("[P2P Listener] Failed to send request to main thread: {}", e);
                 }
             }
-            
         }
-        "2" => {
-            // Sign In
-            print!("Enter your user ID: ");
-            io::stdout().flush()?;
-            let mut user_id = String::new();
-            io::stdin().read_line(&mut user_id)?;
-            let user_id = user_id.trim();
+    });
 
-            let auth_json = authentication::create_auth_json(Some(user_id));
-            let response = authentication::send_auth_request(
-                &socket,
-                &auth_json,
-                &config.server_ips[0],
-                config.request_port,
-            )
-            .await?;
+    // Main menu loop
+    loop {
+        // Authentication menu
+        println!("Welcome! Please choose an option:");
+        println!("1. Register");
+        println!("2. Sign In");
+        print!("Enter your choice: ");
+        io::stdout().flush()?;
 
-            println!("Sign-in response: {}", response);
+        let mut choice = String::new();
+        io::stdin().read_line(&mut choice)?;
+        let choice = choice.trim();
 
-            if response.contains("success") {
-                // Main menu after successful sign-in
-                loop {
-                    println!("\nMain Menu:");
-                    println!("1. Encode Image");
-                    println!("2. Shutdown");
-                    println!("3. Send Encoded Image to Peer");
-                    println!("4. Request Image from Peer");
-                    print!("Enter your choice: ");
-                    io::stdout().flush()?;
-                    let mut menu_choice = String::new();
-                    io::stdin().read_line(&mut menu_choice)?;
-                    let menu_choice = menu_choice.trim();
+        match choice {
+            "1" => {
+                // Multicast registration request
+                let (server_addr, assigned_port) = communication::multicast_request(
+                    &socket,
+                    "register",
+                    &config.server_ips,
+                    config.request_port,
+                )
+                .await?;
 
-                    match menu_choice {
-                        "1" => {
-                            // Send encoded image
-                            print!("Enter the path to the image: ");
-                            io::stdout().flush()?;
-                            let mut input = String::new();
-                            io::stdin().read_line(&mut input)?;
-                            let image_path = Path::new(input.trim());
+                let target_server = format!("{}:{}", server_addr.ip(), assigned_port);
 
-                            if !image_path.exists() {
-                                eprintln!("The specified image path does not exist.");
-                                continue;
-                            }
-                            if !image_path.is_file() {
-                                eprintln!("The specified path is not a file.");
-                                continue;
-                            }
+                // Create and send registration JSON
+                let auth_json = authentication::create_auth_json(None);
+                socket.send_to(auth_json.to_string().as_bytes(), &target_server).await?;
+                println!("Sent registration request to {}", target_server);
 
-                            let resource_id = Uuid::new_v4().to_string();
-                            workflow::process_image(
-                                &socket,
-                                image_path,
-                                &config.server_ips[0],
-                                config.request_port,
-                                &resource_id,
-                                &config.save_dir,
-                            )
-                            .await?;
-                        }
-                        "2" => {
-                            // Shutdown
-                            let shutdown_json = json!({
-                                "type": "shutdown",
-                                "user_id": user_id
-                            });
-                            let response = authentication::send_auth_request(
-                                &socket,
-                                &shutdown_json,
-                                &config.server_ips[0],
-                                config.request_port,
-                            )
-                            .await?;
+                // Receive server response
+                let mut response_buffer = [0u8; 1024];
+                let (size, _) = socket.recv_from(&mut response_buffer).await?;
+                let response = String::from_utf8_lossy(&response_buffer[..size]);
+                println!("Registration response: {}", response);
 
-                            println!("Shutdown response: {}", response);
-                            break;
-                        }
-                        
-                        _ => {
-                            println!("Invalid choice. Please try again.");
-                        }
+                if response.contains("user_id") {
+                    let parsed_response: serde_json::Value = serde_json::from_str(&response)?;
+                    if let Some(user_id) = parsed_response["user_id"].as_str() {
+                        authentication::save_user_id(user_id, Path::new("user.json"))?;
+                    } else {
+                        eprintln!("Error: Failed to retrieve user_id from response.");
                     }
                 }
+                println!("Registration successful! Returning to the main menu...");
             }
-        }
-        _ => {
-            println!("Invalid choice. Exiting.");
+            "2" => {
+                // Multicast sign-in request
+                let (server_addr, assigned_port) = communication::multicast_request(
+                    &socket,
+                    "auth",
+                    &config.server_ips,
+                    config.request_port,
+                )
+                .await?;
+
+                let target_server = format!("{}:{}", server_addr.ip(), assigned_port);
+
+                // Sign In
+                print!("Enter your user ID: ");
+                io::stdout().flush()?;
+                let mut user_id = String::new();
+                io::stdin().read_line(&mut user_id)?;
+                let user_id = user_id.trim();
+
+                let auth_json = authentication::create_auth_json(Some(user_id));
+                socket.send_to(auth_json.to_string().as_bytes(), &target_server).await?;
+                println!("Sent sign-in request to {}", target_server);
+
+                // Handle server response
+                let mut response_buffer = [0u8; 1024];
+                let (size, _) = socket.recv_from(&mut response_buffer).await?;
+                let response = String::from_utf8_lossy(&response_buffer[..size]);
+                println!("Sign-in response: {}", response);
+
+                if response.contains("success") {
+                    println!("Sign-in successful!");
+
+                    // Main menu after successful sign-in
+                    let peer_channel = Arc::new(Mutex::new(p2p_rx));
+                    loop {
+                        println!("\nMain Menu:");
+                        println!("1. Encode Image");
+                        println!("2. Request List of Active Users and Their Images");
+                        println!("3. Request Image From Active User");
+                        println!("4. Increase Views of Image From Active User");
+                        println!("5. Shutdown");
+                        print!("Enter your choice: ");
+                        io::stdout().flush()?;
+                        let mut menu_choice = String::new();
+                        io::stdin().read_line(&mut menu_choice)?;
+                        let menu_choice = menu_choice.trim();
+
+                        match menu_choice {
+                            "1" => {
+                                //workflow::encode_image(&socket, &config).await?;
+                            }
+                            "2" => {
+                                let active_users = workflow::get_active_users(&socket, &config).await?;
+                                println!("Active Users and Their Images:");
+                                for (peer, images) in active_users.iter() {
+                                    println!("{}: {:?}", peer, images);
+                                }
+                            }
+                            "3" => {
+                                workflow::request_image(&socket, &config, &peer_channel).await?;
+                            }
+                            "4" => {
+                                workflow::increase_image_views(&socket, &config).await?;
+                            }
+                            "5" => {
+                                // Shutdown request
+                                let (server_addr, assigned_port) =
+                                    communication::multicast_request(
+                                        &socket,
+                                        "shutdown",
+                                        &config.server_ips,
+                                        config.request_port,
+                                    )
+                                    .await?;
+
+                                let target_server =
+                                    format!("{}:{}", server_addr.ip(), assigned_port);
+
+                                let shutdown_json = json!({
+                                    "type": "shutdown",
+                                    "user_id": user_id
+                                });
+                                socket
+                                    .send_to(shutdown_json.to_string().as_bytes(), &target_server)
+                                    .await?;
+                                println!("Sent shutdown request to {}", target_server);
+
+                                let mut response_buffer = [0u8; 1024];
+                                let (size, _) = socket.recv_from(&mut response_buffer).await?;
+                                let response =
+                                    String::from_utf8_lossy(&response_buffer[..size]);
+                                println!("Shutdown response: {}", response);
+                                break;
+                            }
+                            _ => {
+                                println!("Invalid choice. Please try again.");
+                            }
+                        }
+                    }
+                    break; // Exit the loop after shutdown
+                } else {
+                    println!("Sign-in failed. Returning to the main menu...");
+                }
+            }
+            _ => {
+                println!("Invalid choice. Please try again.");
+            }
         }
     }
 

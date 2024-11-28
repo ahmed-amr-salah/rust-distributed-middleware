@@ -1,8 +1,12 @@
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tokio::net::UdpSocket;
+use tokio::sync::{mpsc, Mutex};
 use tokio::time::{timeout, Duration};
 use crate::communication;
+use crate::p2p;
+use crate::config::Config;
 
 /// Determines which server will handle the request for a given resource ID.
 ///
@@ -91,3 +95,126 @@ pub async fn process_image(
     Ok(())
 }
 
+/// Fetches the list of active users and their images from the server.
+///
+/// # Arguments
+/// - `socket`: The UDP socket used for communication.
+/// - `config`: The configuration containing server details.
+///
+/// # Returns
+/// A vector of tuples containing peer addresses and their available images.
+pub async fn get_active_users(
+    socket: &UdpSocket,
+    config: &Config,
+) -> io::Result<Vec<(String, Vec<String>)>> {
+    let (server_addr, assigned_port) = communication::multicast_request(
+        socket,
+        "active_users",
+        &config.server_ips,
+        config.request_port,
+    )
+    .await?;
+
+    let target_server = format!("{}:{}", server_addr, assigned_port);
+    socket.send_to(b"request_active_users", &target_server).await?;
+    println!("Requested active users from {}", target_server);
+
+    let mut buffer = [0u8; 2048];
+    let (size, _) = socket.recv_from(&mut buffer).await?;
+    let response = String::from_utf8_lossy(&buffer[..size]);
+    let active_users: Vec<(String, Vec<String>)> =
+        serde_json::from_str(&response).unwrap_or_default();
+
+    Ok(active_users)
+}
+
+/// Sends a request for an image from a peer.
+///
+/// # Arguments
+/// - `socket`: The UDP socket used for communication.
+/// - `config`: The configuration containing server details.
+/// - `channel`: A channel for managing user-peer interactions.
+pub async fn request_image(
+    socket: &Arc<UdpSocket>,
+    config: &Config,
+    channel: &Arc<Mutex<mpsc::Receiver<(String, String)>>>,
+) -> io::Result<()> {
+    let active_users = get_active_users(socket, config).await?;
+    println!("Active Users:");
+    for (index, (peer, images)) in active_users.iter().enumerate() {
+        println!("{}: {} - {:?}", index + 1, peer, images);
+    }
+
+    println!("Enter the number of the user to request from:");
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    let user_index = input.trim().parse::<usize>().unwrap() - 1;
+
+    if user_index >= active_users.len() {
+        println!("Invalid selection.");
+        return Ok(());
+    }
+
+    let (peer_addr, images) = &active_users[user_index];
+    println!("Available images: {:?}", images);
+    println!("Enter the image ID to request:");
+    input.clear();
+    io::stdin().read_line(&mut input)?;
+    let image_id = input.trim();
+
+    println!("Enter the number of views to request:");
+    input.clear();
+    io::stdin().read_line(&mut input)?;
+    let views = input.trim().parse::<u32>().unwrap_or(0);
+
+    // Send P2P request
+    p2p::send_image_request(socket, peer_addr, image_id, views).await?;
+
+    println!("Request sent to peer {} for image {}", peer_addr, image_id);
+
+    Ok(())
+}
+
+/// Increases the views for an image from an active user.
+///
+/// # Arguments
+/// - `socket`: The UDP socket used for communication.
+/// - `config`: The configuration containing server details.
+pub async fn increase_image_views(socket: &UdpSocket, config: &Config) -> io::Result<()> {
+    let active_users = get_active_users(socket, config).await?;
+    println!("Active Users:");
+    for (index, (peer, images)) in active_users.iter().enumerate() {
+        println!("{}: {} - {:?}", index + 1, peer, images);
+    }
+
+    println!("Enter the number of the user to request from:");
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    let user_index = input.trim().parse::<usize>().unwrap() - 1;
+
+    if user_index >= active_users.len() {
+        println!("Invalid selection.");
+        return Ok(());
+    }
+
+    let (peer_addr, images) = &active_users[user_index];
+    println!("Available images: {:?}", images);
+    println!("Enter the image ID to increase views:");
+    input.clear();
+    io::stdin().read_line(&mut input)?;
+    let image_id = input.trim();
+
+    println!("Enter the number of additional views:");
+    input.clear();
+    io::stdin().read_line(&mut input)?;
+    let views = input.trim().parse::<u32>().unwrap_or(0);
+
+    // Send P2P request for increasing views
+    p2p::send_image_request(socket, peer_addr, image_id, views).await?;
+    println!(
+        "Request sent to peer {} to increase views for image {}",
+        peer_addr, image_id
+    );
+
+    Ok(())
+}

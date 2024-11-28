@@ -87,23 +87,23 @@ fn save_image_from_chunks(path: &Path, chunks: &[Vec<u8>]) -> io::Result<()> {
 }
 
 
-/// Multicasts a request type to all servers and retrieves the server address and port.
+/// Multicasts a request type to all servers and retrieves the server's IP and assigned port.
 ///
 /// # Arguments
 /// - `socket`: The UDP socket bound to the client.
-/// - `request_type`: A string indicating the type of request (e.g., "register", "auth", "shutdown").
+/// - `request_type`: A string indicating the type of request (e.g., "register", "auth").
 /// - `server_ips`: A slice of server IPs to multicast to.
 /// - `request_port`: The port to send the request to.
 ///
-/// # Returns   
-/// A new `UdpSocket` bound to the correct server address and port.
+/// # Returns
+/// The server's `SocketAddr` (IP and port) and the assigned port (`u16`).
 pub async fn multicast_request(
     socket: &UdpSocket,
     request_type: &str,
     server_ips: &[String],
     request_port: u16,
-) -> io::Result<UdpSocket> {
-    let mut buffer = [0u8; 2];
+) -> io::Result<(std::net::SocketAddr, u16)> {
+    let mut buffer = [0u8; 2]; // Buffer to receive the assigned port from the server
 
     // Send the request type to all servers
     for server_ip in server_ips {
@@ -115,10 +115,11 @@ pub async fn multicast_request(
     // Wait for a response from any server
     match timeout(Duration::from_secs(5), socket.recv_from(&mut buffer)).await {
         Ok(Ok((size, src))) if size == 2 => {
+            // Extract the assigned port from the server's response
             let assigned_port = u16::from_be_bytes([buffer[0], buffer[1]]);
-            let server_socket = UdpSocket::bind("0.0.0.0:0").await?;
             println!("Server at {} assigned port {}", src, assigned_port);
-            Ok(server_socket)
+
+            Ok((src, assigned_port)) // Return server address and assigned port
         }
         _ => {
             eprintln!("No response from any server for {} request.", request_type);
