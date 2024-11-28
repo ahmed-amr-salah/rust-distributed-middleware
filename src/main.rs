@@ -74,8 +74,10 @@ async fn main() -> io::Result<()> {
                 // Main menu after successful sign-in
                 loop {
                     println!("\nMain Menu:");
-                    println!("1. Send Encoded Image");
+                    println!("1. Encode Image");
                     println!("2. Shutdown");
+                    println!("3. Send Encoded Image to Peer");
+                    println!("4. Request Image from Peer");
                     print!("Enter your choice: ");
                     io::stdout().flush()?;
                     let mut menu_choice = String::new();
@@ -128,6 +130,7 @@ async fn main() -> io::Result<()> {
                             println!("Shutdown response: {}", response);
                             break;
                         }
+                        
                         _ => {
                             println!("Invalid choice. Please try again.");
                         }

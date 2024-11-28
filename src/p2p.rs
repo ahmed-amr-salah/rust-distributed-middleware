@@ -36,6 +36,7 @@ pub async fn respond_to_request(
             "approved_views": approved_views,
             "data": "encrypted_image_data" // Replace with actual encrypted data
         });
+        let peer_addr = socket.local_addr()?;
 
         socket.send_to(response.to_string().as_bytes(), peer_addr).await?;
         println!("Approved request for {} views", approved_views);
