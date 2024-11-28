@@ -1,82 +1,59 @@
-use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::path::Path;
 use tokio::net::UdpSocket;
-use tokio::time::{timeout, Duration};
-use dotenv::dotenv;
-use std::env;
+use uuid::Uuid; 
 mod communication;
 mod decode;
+mod encode;
+mod config;
+mod workflow;
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
-    // LOAD THE LOCAL VARIABLE
-    dotenv().ok();
-    
+    // Load environment variables and configuration
+    let config = config::load_config();
     let socket = UdpSocket::bind("0.0.0.0:0").await?;
-    let directory_path = env::var("IMAGE_DIR").expect("IMAGE_DIR is not set in .env");
-    let request_port = env::var("LISTENING_PORT").expect("LISTENING_PORT is not set in .env");
 
-    // Define the IPs and request port for the three servers
-    let server_ips = [
-        env::var("FIRST_SERVER_IP").expect("FIRST_SERVER_IP is not set in .env"),
-        env::var("SECOND_SERVER_IP").expect("SECOND_SERVER_IP is not set in .env"),
-    ];    
-    let mut buffer = [0u8; 2];
-
-    // Send "REQUEST" message to all three servers
-    for server_ip in &server_ips {
-        let server_addr = format!("{}:{}", server_ip, request_port);
-        socket.send_to(b"REQUEST", &server_addr).await?;
-        println!("Sent request to server at {}", server_addr);
+    // User input: image path and resource ID
+    let mut input = String::new();
+    print!("Enter the path to the image: ");
+    io::stdout().flush()?;
+    io::stdin().read_line(&mut input)?;
+    let image_path = Path::new(input.trim());
+    
+    // Validate the image path
+    if !image_path.exists() {
+        eprintln!("The specified image path does not exist.");
+        return Ok(());
     }
-
-    // Wait for the first server to respond with an assigned port
-    let mut assigned_port = None;
-    for _ in 0..server_ips.len() {
-        match timeout(Duration::from_secs(5), socket.recv_from(&mut buffer)).await {
-            Ok(Ok((size, src))) if size == 2 => {
-                assigned_port = Some((src, u16::from_be_bytes([buffer[0], buffer[1]])));
-                println!("Received port assignment from server at {}", src);
-                break;
-            }
-            _ => {
-                println!("No response or invalid response from a server.");
-            }
-        }
+    if !image_path.is_file() {
+        eprintln!("The specified path is not a file.");
+        return Ok(());
     }
+    ///////////////////////////////////////////////////////
+    // Generate a random resource ID
+    let resource_id = Uuid::new_v4().to_string();
+    println!("Generated unique resource ID: {}", resource_id);
+    ///////////////////////////////////////////////////////
 
-    // If no server responded, exit with an error
-    if let Some((server_addr, port)) = assigned_port {
-        println!("Proceeding with server at {}:{}", server_addr, port);
+    // Find the server handling the request
+    if let Some((server_addr, port)) =
+        workflow::find_server_for_resource(&socket, &config.server_ips, config.request_port, &resource_id).await?
+    {
+        println!("Server {}:{} will handle the request for resource ID {}", server_addr, port, resource_id);
 
-        // Iterate over images in the directory and send them
-        for entry in fs::read_dir(directory_path)? {
-            let image_path = entry?.path();
-
-            // Send image to the selected server
-            communication::send_image_over_udp(&socket, &image_path, server_addr.ip().to_string(), port).await?;
-            println!("Image sent to server at {}", server_addr);
-
-            // Receive encrypted image response
-            let save_path = Path::new("../received_images/encrypted_image_received.png");
-            communication::receive_encrypted_image(&socket, save_path).await?;
-            println!("Encrypted image received and saved at {:?}", save_path);
-
-            // Decode the encrypted image after receiving each one
-            let decode_path = "../received_images/encrypted_image_received.png";
-            let save_decoded = "../received_images/decrypted_image_received.png";
-
-            match tokio::task::spawn_blocking(move || decode::decode_image(decode_path, save_decoded))
-                .await
-            {
-                Ok(Ok(_)) => println!("Decoded image saved at {:?}", save_decoded),
-                Ok(Err(e)) => eprintln!("Failed to decode image: {}", e),
-                Err(join_err) => eprintln!("Failed to execute decode_image: {:?}", join_err),
-            }
-        }
+        // Process the single image
+        workflow::process_image(
+            &socket,
+            image_path,
+            &server_addr,
+            port,
+            &resource_id,
+            &config.save_dir,
+        )
+        .await?;
     } else {
-        eprintln!("No server assigned a port. Exiting.");
+        eprintln!("No server responded to the resource ID. Exiting.");
     }
 
     Ok(())
