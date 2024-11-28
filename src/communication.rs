@@ -124,10 +124,17 @@ pub async fn receive_image_over_udp(socket: &UdpSocket) -> io::Result<(HashMap<u
         // Handle the chunk if it's a valid data packet
         if size >= 4 {
             let chunk_id = u32::from_be_bytes(buffer[..4].try_into().unwrap());
+            
+          
+
             let chunk_data = buffer[4..size].to_vec();
             chunks.insert(chunk_id as usize, chunk_data);
+            // I want to see the content of eah chunk as string 
+            let chunk_data = String::from_utf8_lossy(&buffer[4..size]);
+            
 
-            println!("Received chunk {} from {}", chunk_id, src);
+
+            //println!("Received chunk {} from {}", chunk_id, src);
 
             // Send acknowledgment back to the client
             socket.send_to(&chunk_id.to_be_bytes(), &src).await?;

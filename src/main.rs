@@ -27,23 +27,18 @@ const HEARTBEAT_PORT: u16 = 8085;   // Port for both sending and receiving heart
 const HEARTBEAT_PERIOD: u64 = 3;
 
 
-// // Declare `used_ports` as a global, shared state outside `main`
-// lazy_static::lazy_static! {
-//     static ref used_ports: Arc<tokio::sync::Mutex<HashSet<u16>>> = Arc::new(Mutex::new(HashSet::new()));
-// }
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // let client_port = communication::allocate_unique_port(&used_ports).await?;
     let local_addr: SocketAddr = "10.7.19.204:8081".parse().unwrap();
     let peer_addresses = vec![
-        // "10.7.19.204:8085".parse().unwrap(),
-        "127.0.0.1:8085".parse().unwrap(),
+        "10.7.19.205:8085".parse().unwrap(),
+        // "127.0.0.1:8085".parse().unwrap(),
     ];
 
     let stats = Arc::new(Mutex::new(ServerStats {
         self_addr: local_addr,
-        pr: -1.0,
+        pr: 0.0,
         peer_priorities: HashMap::new(),
         client_request_queue: HashSet::new(),
         peer_nodes: peer_addresses.clone(),
@@ -75,9 +70,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // Main loop to handle client requests
-    // let used_ports = Arc::new(Mutex::new(HashSet::<u16>::new())); // Track used ports for clients
 
+    // Main loop to handle client requests
     loop {
         // let client_port = communication::allocate_unique_port(&used_ports).await?; //Mario
         // let client_socket = Arc::new(UdpSocket::bind(("0.0.0.0", client_port)).await?); //Mario
@@ -108,7 +102,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
 
         let stats_clone = Arc::clone(&stats);
-        // let used_ports_clone = Arc::clone(&used_ports);
         let client_socket_clone = Arc::clone(&client_socket); // Arc clone, not UdpSocket clone
 
 
@@ -118,17 +111,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         
             if is_coordinator {
                 println!("This server is elected as coordinator for request {}", request_id);
-        
-                // Coordinator handles the client by invoking `handle_client`
-                if let Err(e) = communication::handle_client(client_socket_clone, client_addr).await {
-                    eprintln!("Error handling client {}: {}", client_addr, e);
+
+                // print the content of the packet the we received as string not as bytes
+                let json = String::from_utf8_lossy(&buffer[..size]);
+                println!("Received request from client {}", String::from_utf8_lossy(&buffer[..size]));
+                
+                // Types of Requests
+                // 1. Client Registration
+                if json.contains("register") {
+                    println!("Client registration request received");
                 }
+
+                // 2. Client Sign-in
+                else if json.contains("sign_in") {
+                    println!("Client sign-in request received");
+                }
+
+                // 2. Client Shutdown
+                else if json.contains("shutdown") {
+                    println!("Client shutdown request received");
+                }
+
+                // 3. Client requests for image encryption
+                else {
+                    println!("Client encryption request received");
+                
+                    // Coordinator handles the client by invoking `handle_client`
+                    if let Err(e) = communication::handle_client(client_socket_clone, client_addr).await {
+                        eprintln!("Error handling client {}: {}", client_addr, e);
+                    }
+                }
+
                 // Free the port after transmission
-                // communication::free_port(&used_ports_clone, client_port);
                 drop(client_socket);
                 
             } else {
-                println!("Another server will handle the request {}", request_id);
+                println!("Another server will handle the re10.7.19.18-58052quest {}", request_id);
             }pub async fn handle_heartbeat(
                 sender_addr: SocketAddr,
                 priority: f32,
