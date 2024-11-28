@@ -32,7 +32,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // let client_port = communication::allocate_unique_port(&used_ports).await?;
     let local_addr: SocketAddr = "10.7.19.204:8081".parse().unwrap();
     let peer_addresses = vec![
-        "10.7.19.205:8085".parse().unwrap(),
+        "10.7.19.18:8085".parse().unwrap(),
         // "127.0.0.1:8085".parse().unwrap(),
     ];
 
@@ -73,8 +73,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Main loop to handle client requests
     loop {
-        // let client_port = communication::allocate_unique_port(&used_ports).await?; //Mario
-        // let client_socket = Arc::new(UdpSocket::bind(("0.0.0.0", client_port)).await?); //Mario
         let client_socket = Arc::new(UdpSocket::bind("0.0.0.0:0").await?);
         let client_port = client_socket.local_addr()?.port();
 
@@ -87,12 +85,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             continue;
         }
         
-        println!("Received request from client {}", client_addr);
-        
-        // let client_socket = Arc::new(UdpSocket::bind(("0.0.0.0", client_port)).await?);
-        println!("---------------------> {}", client_port);
-        listen_socket.send_to(&client_port.to_be_bytes(), client_addr).await?;
-        println!("Allocated port {} for client {}", client_port, client_addr);
+        println!("Received request from client ---------------------> {}", client_addr);
 
         let request_id = format!(
             "{}-{}-{:x}", 
@@ -111,6 +104,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         
             if is_coordinator {
                 println!("This server is elected as coordinator for request {}", request_id);
+                listen_socket.send_to(&client_port.to_be_bytes(), client_addr).await?;
+                println!("Allocated port {} for client {}", client_port, client_addr);
 
                 // print the content of the packet the we received as string not as bytes
                 let json = String::from_utf8_lossy(&buffer[..size]);

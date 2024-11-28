@@ -13,3 +13,8 @@
 .vscode/
 .idea/
 *.iml
+
+# ignore Encryption-images dir
+Encryption-images/
+
+images/
