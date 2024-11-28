@@ -4,6 +4,8 @@ use std::path::Path;
 use tokio::net::UdpSocket;
 use tokio::time::{timeout, Duration};
 
+
+
 /// Sends an image to the specified destination IP and port in chunks.
 pub async fn send_image_over_udp(socket: &UdpSocket, image_path: &Path, dest_ip: String, port: u16) -> io::Result<()> {
     let image_data = fs::read(image_path)?;
@@ -82,4 +84,48 @@ fn save_image_from_chunks(path: &Path, chunks: &[Vec<u8>]) -> io::Result<()> {
     }
 
     Ok(())
+}
+
+
+/// Multicasts a request type to all servers and retrieves the server address and port.
+///
+/// # Arguments
+/// - `socket`: The UDP socket bound to the client.
+/// - `request_type`: A string indicating the type of request (e.g., "register", "auth", "shutdown").
+/// - `server_ips`: A slice of server IPs to multicast to.
+/// - `request_port`: The port to send the request to.
+///
+/// # Returns   
+/// A new `UdpSocket` bound to the correct server address and port.
+pub async fn multicast_request(
+    socket: &UdpSocket,
+    request_type: &str,
+    server_ips: &[String],
+    request_port: u16,
+) -> io::Result<UdpSocket> {
+    let mut buffer = [0u8; 2];
+
+    // Send the request type to all servers
+    for server_ip in server_ips {
+        let server_addr = format!("{}:{}", server_ip, request_port);
+        socket.send_to(request_type.as_bytes(), &server_addr).await?;
+        println!("Sent {} request to {}", request_type, server_addr);
+    }
+
+    // Wait for a response from any server
+    match timeout(Duration::from_secs(5), socket.recv_from(&mut buffer)).await {
+        Ok(Ok((size, src))) if size == 2 => {
+            let assigned_port = u16::from_be_bytes([buffer[0], buffer[1]]);
+            let server_socket = UdpSocket::bind("0.0.0.0:0").await?;
+            println!("Server at {} assigned port {}", src, assigned_port);
+            Ok(server_socket)
+        }
+        _ => {
+            eprintln!("No response from any server for {} request.", request_type);
+            Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "No server response for multicast request",
+            ))
+        }
+    }
 }
