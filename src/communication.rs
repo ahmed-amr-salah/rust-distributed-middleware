@@ -11,7 +11,7 @@ use tokio::task;
 use rand::Rng;
 use crate::encode::encode_image_async;
 
-const ENCODING_IMAGE: &str = "/home/g6/Desktop/Hamza's_Work/dist4/rust-distributed-middleware/Encryption-images/default.jpg";
+const ENCODING_IMAGE: &str = "../Encryption-images/default.jpg";
 
 /// Attempts to allocate a unique port in the range 9000-9999, checking if it's available by binding to it temporarily.
 pub async fn allocate_unique_port(used_ports: &Arc<Mutex<HashSet<u16>>>) -> io::Result<u16> {
@@ -162,7 +162,7 @@ pub async fn handle_client(socket: Arc<UdpSocket>, client_addr: SocketAddr) -> i
     println!("Image saved at {}", image_path);
 
     let random_id: u32 = rand::thread_rng().gen_range(1000..10000);
-    let encoded_image = format!("/home/g6/Desktop/Hamza's_Work/dist4/rust-distributed-middleware/Encryption-images/encoded_cover{}.png", random_id);
+    let encoded_image = format!("../Encryption-images/encoded_cover{}.png", random_id);
 
     // Call the async encoding function and await its completion
     encode_image_async(ENCODING_IMAGE.to_string(), image_path.to_string(), encoded_image.to_string())
