@@ -3,6 +3,7 @@ use tokio::net::UdpSocket;
 use tokio::time::{Duration, sleep};
 use std::collections::{HashMap, HashSet};
 use serde_cbor;
+use serde_json::json;
 use std::io;
 use sysinfo::{System, SystemExt};
 use rand::Rng;
@@ -29,10 +30,11 @@ const HEARTBEAT_PERIOD: u64 = 3;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // let client_port = communication::allocate_unique_port(&used_ports).await?;
-    let local_addr: SocketAddr = "10.7.19.18:8081".parse().unwrap();
+
+    // Server settings
+    let local_addr: SocketAddr = "10.7.19.204:8081".parse().unwrap();
     let peer_addresses = vec![
-        "10.7.19.204:8085".parse().unwrap(),
+        "10.7.19.18:8085".parse().unwrap(),
         // "127.0.0.1:8085".parse().unwrap(),
     ];
 
@@ -105,19 +107,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         
             if is_coordinator {
                 println!("This server is elected as coordinator for request {}", request_id);
-                // Send the assigned client port back to the client
-                if let Err(e) = async {
-                    listen_socket_clone
-                        .send_to(&client_port.to_be_bytes(), client_addr)
-                        .await?;
-                    Ok::<(), io::Error>(()) // Explicitly define the `Result` type
-                }
-                .await
-                {
-                    eprintln!("Error in spawned task: {}", e);
-                }
-                println!("Allocated port {} for client {}", client_port, client_addr);
-
+                
                 // print the content of the packet the we received as string not as bytes
                 let json = String::from_utf8_lossy(&buffer[..size]);
                 println!("Received request from client {}", String::from_utf8_lossy(&buffer[..size]));
@@ -126,22 +116,48 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // 1. Client Registration
                 if json.contains("register") {
                     println!("Client registration request received");
-                }
 
+                    let json_data = json!({ "state": "success", "user_id": "1" });
+                    let json_str = json_data.to_string();
+                    
+                    if let Err(e) = async {
+                        listen_socket_clone
+                            .send_to(json_str.as_bytes(), client_addr)
+                            .await?;
+                        Ok::<(), io::Error>(()) // Explicitly define the `Result` type
+                    }
+                    .await
+                    {
+                        eprintln!("Error in spawned task: {}", e);
+                    }
+                }
+                
                 // 2. Client Sign-in
                 else if json.contains("sign_in") {
                     println!("Client sign-in request received");
                 }
-
+                
                 // 2. Client Shutdown
                 else if json.contains("shutdown") {
                     println!("Client shutdown request received");
                 }
-
+                
                 // 3. Client requests for image encryption
                 else {
                     println!("Client encryption request received");
-                
+                    // Send the assigned client port back to the client
+                    if let Err(e) = async {
+                        listen_socket_clone
+                            .send_to(&client_port.to_be_bytes(), client_addr)
+                            .await?;
+                        Ok::<(), io::Error>(()) // Explicitly define the `Result` type
+                    }
+                    .await
+                    {
+                        eprintln!("Error in spawned task: {}", e);
+                    }
+                    println!("Allocated port {} for client {}", client_port, client_addr);
+                    
                     // Coordinator handles the client by invoking `handle_client`
                     if let Err(e) = communication::handle_client(client_socket_clone, client_addr).await {
                         eprintln!("Error handling client {}: {}", client_addr, e);
