@@ -30,9 +30,9 @@ const HEARTBEAT_PERIOD: u64 = 3;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // let client_port = communication::allocate_unique_port(&used_ports).await?;
-    let local_addr: SocketAddr = "10.7.19.204:8081".parse().unwrap();
+    let local_addr: SocketAddr = "10.7.19.18:8081".parse().unwrap();
     let peer_addresses = vec![
-        "10.7.19.18:8085".parse().unwrap(),
+        "10.7.19.204:8085".parse().unwrap(),
         // "127.0.0.1:8085".parse().unwrap(),
     ];
 
@@ -46,7 +46,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         peer_alive: HashMap::new(),
     }));
 
-    let listen_socket = UdpSocket::bind(local_addr).await?;
+    let listen_socket = Arc::new(UdpSocket::bind(local_addr).await?);
     println!("Server listening for initial client requests on {}", local_addr);
 
     // Shared heartbeat socket for sending and receiving on HEARTBEAT_PORT
@@ -98,13 +98,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let client_socket_clone = Arc::clone(&client_socket); // Arc clone, not UdpSocket clone
 
 
+        let listen_socket_clone = Arc::clone(&listen_socket);
         tokio::spawn(async move {
             // Determine if this server should act as the coordinator for this request
             let is_coordinator = process_client_request(SERVER_ID, request_id.clone(), client_socket_clone.clone(), stats_clone.clone()).await;
         
             if is_coordinator {
                 println!("This server is elected as coordinator for request {}", request_id);
-                listen_socket.send_to(&client_port.to_be_bytes(), client_addr).await?;
+                // Send the assigned client port back to the client
+                if let Err(e) = async {
+                    listen_socket_clone
+                        .send_to(&client_port.to_be_bytes(), client_addr)
+                        .await?;
+                    Ok::<(), io::Error>(()) // Explicitly define the `Result` type
+                }
+                .await
+                {
+                    eprintln!("Error in spawned task: {}", e);
+                }
                 println!("Allocated port {} for client {}", client_port, client_addr);
 
                 // print the content of the packet the we received as string not as bytes
