@@ -18,6 +18,3 @@
 Encryption-images/
 
 images/
-
-# ignore .env
-.env
