@@ -2,6 +2,11 @@ use std::fs::{self, File};
 use std::path::Path;
 use serde_json::json;
 use tokio::net::UdpSocket;
+use steganography::encoder::Encoder;
+use steganography::decoder::Decoder;
+use image::{open, DynamicImage};
+use std::error::Error;
+use std::fs;
 
 // Sends an image request to another peer
 pub async fn send_image_request(
@@ -21,6 +26,63 @@ pub async fn send_image_request(
     Ok(())
 }
 
+// Async encode function
+pub async fn encode_access_rights(
+    img_id: &str,
+    ip_address: &str,
+    num_views: u16,
+) -> Result<DynamicImage, Box<dyn Error>> {
+    // Convert IP address and number of views to binary data
+    let mut binary_data = Vec::with_capacity(48); // Pre-allocate space for 32 bits of IP + 16 bits of views
+    binary_data.extend(ip_to_binary(ip_address));
+    binary_data.extend(num_views_to_binary(num_views));
+
+    // Load the cover image asynchronously
+    let img_path = img_id + ".png";
+    let image = tokio::task::spawn_blocking(move || {
+        open(img_path)?.to_rgba()
+    })
+    .await??;
+
+    // Create the encoder and encode the data into the image
+    let encoder = Encoder::new(&binary_data, DynamicImage::ImageRgba8(cover_image));
+    let encoded_image = tokio::task::spawn_blocking(move || {
+        encoder.encode_alpha()
+    })
+    .await??;
+
+    // Wrap the encoded image buffer in a DynamicImage
+    Ok(DynamicImage::ImageRgba8(encoded_image))
+}
+
+fn decode_access_rights(
+    encoded_image: &DynamicImage,
+    output_file_path: &str,
+) -> Result<(), Box<dyn Error>> {
+    // Create the decoder and decode the data
+    let decoder = Decoder::new(encoded_image.to_rgba());
+    let decoded_data = decoder.decode_alpha();
+
+    // Extract IP address and number of views from the decoded data
+    let ip_binary = &decoded_data[..32];
+    let views_binary = &decoded_data[32..48];
+
+    let ip_address = ip_binary.chunks(8)
+    .map(|chunk| chunk.iter().fold(0, |acc, &bit| (acc << 1) | bit) as u8)
+    .map(|octet| octet.to_string())
+    .collect::<Vec<String>>()
+    .join(".");
+
+    let num_views = views_binary.iter().fold(0, |acc, &bit| (acc << 1) | bit as u16);
+
+    // Save the decoded data to a text file
+    let decoded_text = format!("Decoded IP Address: {}\nDecoded Number of Views: {}", ip_address, num_views);
+    fs::write(output_file_path, decoded_text)?;
+
+    println!("Decoded access rights saved to {}", output_file_path);
+    Ok(())
+}
+
 // Handles incoming image requests
 pub async fn respond_to_request(
     socket: &UdpSocket,
@@ -29,12 +91,22 @@ pub async fn respond_to_request(
     peer_addr: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let approved_views = available_views.min(3); // Example logic: Approve up to 3 views
+
+    let encoded_img = encode_access_rights(image_id, peer_addr, approved_views); 
     if approved_views > 0 {
+        // Serialize the encoded image to PNG
+        let mut buffer = Vec::new();
+        tokio::task::spawn_blocking({
+            let encoded_image = encoded_image.clone();
+            move || encoded_image.write_to(&mut Cursor::new(&mut buffer), ImageOutputFormat::Png)
+        })
+        .await??;
+
         let response = json!({
             "type": "image_response",
             "image_id": image_id,
             "approved_views": approved_views,
-            "data": "encrypted_image_data" // Replace with actual encrypted data
+            "data": base64::encode(&buffer)// Replace with actual encrypted data
         });
         let peer_addr = socket.local_addr()?;
 
@@ -67,6 +139,7 @@ pub fn store_received_image(image_id: &str, data: &[u8], views: u32) -> Result<(
     println!("Stored image {} with {} views", image_id, views);
     Ok(())
 }
+
 
 // Decrypts and displays an image
 pub fn decrypt_and_display_image(image_id: &str) -> Result<(), Box<dyn std::error::Error>> {
