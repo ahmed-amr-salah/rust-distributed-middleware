@@ -16,3 +16,11 @@
 .vscode/
 .idea/
 *.iml
+
+#ignore the images in received_images dir
+
+received_images/
+
+#ignore the image in the images_dir
+
+Images_dir/
