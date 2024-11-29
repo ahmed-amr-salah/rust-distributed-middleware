@@ -24,3 +24,6 @@ received_images/
 #ignore the image in the images_dir
 
 Images_dir/
+
+# ignore user.josn file
+user.json
