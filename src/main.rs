@@ -13,19 +13,24 @@ use tokio::sync::Mutex;
 use std::sync::Arc;
 use std::net::UdpSocket as StdUdpSocket;
 use std::time::SystemTime;
-
+use std::env;
+use dotenv::dotenv;
+use mysql::Pool;
+use crate::serde_cbor::Value;
 
 mod config;
 mod server;
 mod communication;
 mod encode; // Assuming this module includes encryption functions
+mod DOS;
 
 use server::{ServerStats, process_client_request, handle_heartbeat, handle_coordinator_notification};
-
+use DOS::{register_user, sign_in_user, get_images_up, shutdown_client};
 // Constants
 const SERVER_ID: u32 = 1;          // Modify this for each server instance
 const HEARTBEAT_PORT: u16 = 8085;   // Port for both sending and receiving heartbeat messages
 const HEARTBEAT_PERIOD: u64 = 3;
+
 
 
 #[tokio::main]
@@ -37,6 +42,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "10.7.19.18:8085".parse().unwrap(),
         // "127.0.0.1:8085".parse().unwrap(),
     ];
+
+    // Connect to the database
+    dotenv().ok();
+    let db_url = env::var("db_url").expect("DATABASE_URL must be set");
+    let pool = Pool::new(db_url.as_str())?;
+    let mut conn = pool.get_conn()?;
+    let conn = Arc::new(Mutex::new(conn));
+    println!("Connected to the DoS successfully");
 
     let stats = Arc::new(Mutex::new(ServerStats {
         self_addr: local_addr,
@@ -71,13 +84,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             sleep(Duration::from_secs(HEARTBEAT_PERIOD)).await;
         }
     });
-
-
+    
+    
     // Main loop to handle client requests
     loop {
         let client_socket = Arc::new(UdpSocket::bind("0.0.0.0:0").await?);
         let client_port = client_socket.local_addr()?.port();
-
+        
         let mut buffer = [0u8; 1024];
         let (size, client_addr) = listen_socket.recv_from(&mut buffer).await?;
         
@@ -88,41 +101,45 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         
         println!("Received request from client ---------------------> {}", client_addr);
-
+        
         let request_id = format!(
             "{}-{}-{:x}", 
             client_addr.ip(),
             client_addr.port(),
             md5::compute(&buffer[..size]) // Ensure request ID is unique
         );
-
+        
+        
         let stats_clone = Arc::clone(&stats);
         let client_socket_clone = Arc::clone(&client_socket); // Arc clone, not UdpSocket clone
-
-
+        
+        
         let listen_socket_clone = Arc::clone(&listen_socket);
+        let conn_clone = Arc::clone(&conn);
         tokio::spawn(async move {
             // Determine if this server should act as the coordinator for this request
             let is_coordinator = process_client_request(SERVER_ID, request_id.clone(), client_socket_clone.clone(), stats_clone.clone()).await;
-        
+            
             if is_coordinator {
                 println!("This server is elected as coordinator for request {}", request_id);
                 
-                // print the content of the packet the we received as string not as bytes
+                // To determine the request type
                 let json = String::from_utf8_lossy(&buffer[..size]);
-                println!("Received request from client {}", String::from_utf8_lossy(&buffer[..size]));
                 
                 // Types of Requests
                 // 1. Client Registration
                 if json.contains("register") {
+                    println!("Received request from client {}", String::from_utf8_lossy(&buffer[..size]));
                     println!("Client registration request received");
-
-                    let json_data = json!({ "state": "success", "user_id": "1" });
-                    let json_str = json_data.to_string();
-                    
+                    let mut dos_conn = conn_clone.lock().await;
+                    let client_addr_clone = client_addr.clone();
+                    let response = register_user(&mut dos_conn, &client_addr_clone.to_string());
+                    println!("Response: {}", response);
+                    let response_bytes = serde_json::to_vec(&response).unwrap();  
+                    println!("This is the client Address I am sending to ------>: {}",client_addr);                
                     if let Err(e) = async {
                         listen_socket_clone
-                            .send_to(json_str.as_bytes(), client_addr)
+                            .send_to(&response_bytes, client_addr)
                             .await?;
                         Ok::<(), io::Error>(()) // Explicitly define the `Result` type
                     }
@@ -134,22 +151,102 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 
                 // 2. Client Sign-in
                 else if json.contains("sign_in") {
+                    println!("Received request from client {}", String::from_utf8_lossy(&buffer[..size]));
                     println!("Client sign-in request received");
+                    let json_response: serde_json::Value = match serde_json::from_slice(&buffer[..size]) {
+                        Ok(json) => json,
+                        Err(e) => {
+                            eprintln!("Failed to parse JSON: {}", e);
+                            return;
+                        }
+                    };
+                    let client_id = json_response["user_id"].as_u64().unwrap();
+
+                    let mut dos_conn = conn_clone.lock().await;
+                    let client_addr_clone = client_addr.clone();
+
+                    let response = sign_in_user(&mut dos_conn, &client_id, &client_addr_clone.to_string());
+                    println!("Response: {}", response);
+                    let response_bytes = serde_json::to_vec(&response).unwrap();
+                    if let Err(e) = async {
+                        listen_socket_clone
+                            .send_to(&response_bytes, client_addr)
+                            .await?;
+                        Ok::<(), io::Error>(()) // Explicitly define the `Result` type
+                    }
+                    .await
+                    {
+                        eprintln!("Error in spawned task: {}", e);
+                    }
                 }
                 
-                // 2. Client Shutdown
+                
+                // 3. Client asks who is up and has what
+                else if json.contains("active_users") {
+                    println!("Client who_is_up request received");
+                    println!("Received request from client {}", String::from_utf8_lossy(&buffer[..size]));
+                    let mut dos_conn = conn_clone.lock().await;
+                    let json_response: serde_json::Value = match serde_json::from_slice(&buffer[..size]) {
+                        Ok(json) => json,
+                        Err(e) => {
+                            eprintln!("Failed to parse JSON: {}", e);
+                            return;
+                        }
+                    };
+                    let client_id = json_response["user_id"].as_u64().unwrap();
+                    let response = get_images_up(&mut dos_conn, &client_id);
+                    println!("Response: {}", response);
+                    let response_bytes = serde_json::to_vec(&response).unwrap();
+                    if let Err(e) = async {
+                        listen_socket_clone
+                            .send_to(&response_bytes, client_addr)
+                            .await?;
+                        Ok::<(), io::Error>(()) // Explicitly define the `Result` type
+                    }
+                    .await
+                    {
+                        eprintln!("Error in spawned task: {}", e);
+                    }
+                }
+
+
+                // 4. Client Shutdown
                 else if json.contains("shutdown") {
                     println!("Client shutdown request received");
+                    println!("Received request from client {}", String::from_utf8_lossy(&buffer[..size]));
+                    let json_response: serde_json::Value = match serde_json::from_slice(&buffer[..size]) {
+                        Ok(json) => json,
+                        Err(e) => {
+                            eprintln!("Failed to parse JSON: {}", e);
+                            return;
+                        }
+                    };
+                    let client_id = json_response["user_id"].as_u64().unwrap();
+                    let mut dos_conn = conn_clone.lock().await;
+                    let response = shutdown_client(&mut dos_conn, client_id);
+                    println!("Response: {}", response);
+                    let response_bytes = serde_json::to_vec(&response).unwrap();
+                    if let Err(e) = async {
+                        listen_socket_clone
+                            .send_to(&response_bytes, client_addr)
+                            .await?;
+                        Ok::<(), io::Error>(()) // Explicitly define the `Result` type
+                    }
+                    .await
+                    {
+                        eprintln!("Error in spawned task: {}", e);
+                    }
+
                 }
                 
-                // 3. Client requests for image encryption
+                // 5. Client requests for image encryption
                 else {
                     println!("Client encryption request received");
                     // Send the assigned client port back to the client
                     if let Err(e) = async {
                         listen_socket_clone
-                            .send_to(&client_port.to_be_bytes(), client_addr)
-                            .await?;
+                        .send_to(&client_port.to_be_bytes(), client_addr)
+                        .await?;
                         Ok::<(), io::Error>(()) // Explicitly define the `Result` type
                     }
                     .await
@@ -164,6 +261,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
 
+                
                 // Free the port after transmission
                 drop(client_socket);
                 
