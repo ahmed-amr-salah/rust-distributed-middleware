@@ -3,6 +3,8 @@ use std::io::{self, Write};
 use std::path::Path;
 use tokio::net::UdpSocket;
 use tokio::time::{timeout, Duration};
+use serde_json::Value;
+use std::net::SocketAddr;
 
 
 
@@ -97,32 +99,34 @@ fn save_image_from_chunks(path: &Path, chunks: &[Vec<u8>]) -> io::Result<()> {
 ///
 /// # Returns
 /// The server's `SocketAddr` (IP and port) and the assigned port (`u16`).
-pub async fn multicast_request(
+
+pub async fn multicast_request_with_payload(
     socket: &UdpSocket,
-    request_type: &str,
+    payload: String,
     server_ips: &[String],
     request_port: u16,
-) -> io::Result<(std::net::SocketAddr, u16)> {
-    let mut buffer = [0u8; 2]; // Buffer to receive the assigned port from the server
+) -> io::Result<(std::net::SocketAddr, serde_json::Value)> {
+    let mut buffer = [0u8; 1024]; // Buffer to receive the server response
 
-    // Send the request type to all servers
+    // Send the payload to all servers
     for server_ip in server_ips {
         let server_addr = format!("{}:{}", server_ip, request_port);
-        socket.send_to(request_type.as_bytes(), &server_addr).await?;
-        println!("Sent {} request to {}", request_type, server_addr);
+        socket.send_to(payload.as_bytes(), &server_addr).await?;
+        println!("Sent payload to {}", server_addr);
     }
 
     // Wait for a response from any server
     match timeout(Duration::from_secs(5), socket.recv_from(&mut buffer)).await {
-        Ok(Ok((size, src))) if size == 2 => {
-            // Extract the assigned port from the server's response
-            let assigned_port = u16::from_be_bytes([buffer[0], buffer[1]]);
-            println!("Server at {} assigned port {}", src, assigned_port);
+        Ok(Ok((size, src))) => {
+            let response = String::from_utf8_lossy(&buffer[..size]);
+            let response_json: serde_json::Value = serde_json::from_str(&response).unwrap_or_else(|_| {
+                serde_json::json!({"error": "Invalid response"})
+            });
 
-            Ok((src, assigned_port)) // Return server address and assigned port
+            Ok((src, response_json))
         }
         _ => {
-            eprintln!("No response from any server for {} request.", request_type);
+            eprintln!("No response from any server for the request.");
             Err(io::Error::new(
                 io::ErrorKind::TimedOut,
                 "No server response for multicast request",

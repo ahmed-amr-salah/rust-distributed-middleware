@@ -2,7 +2,8 @@ use std::io::{self, Write};
 use std::path::Path;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::mpsc;
+use tokio::sync::Mutex;
 use serde_json::json;
 use uuid::Uuid;
 
@@ -18,17 +19,18 @@ mod p2p;
 async fn main() -> io::Result<()> {
     // Load environment variables and configuration
     let config = config::load_config();
-    let socket = Arc::new(UdpSocket::bind("0.0.0.0:0").await?);
+    let socket = Arc::new(UdpSocket::bind("0.0.0.0:0").await?); // Wrap in Arc
 
-    // Set up channel for peer-to-peer communication
-    let (p2p_tx, mut p2p_rx) = mpsc::channel::<(String, String)>(100);
-    let p2p_socket = Arc::clone(&socket);
+    // P2P communication setup
+    let (p2p_tx, mut p2p_rx) = mpsc::channel(100);
+    let p2p_socket = Arc::new(UdpSocket::bind("0.0.0.0:0").await?);
 
     // Spawn P2P listener thread
+    let p2p_socket_clone = Arc::clone(&p2p_socket);
     tokio::spawn(async move {
         let mut buffer = [0u8; 1024];
         loop {
-            if let Ok((size, src)) = p2p_socket.recv_from(&mut buffer).await {
+            if let Ok((size, src)) = p2p_socket_clone.recv_from(&mut buffer).await {
                 let request = String::from_utf8_lossy(&buffer[..size]).to_string();
                 println!("[P2P Listener] Received request: {} from {}", request, src);
 
@@ -40,7 +42,6 @@ async fn main() -> io::Result<()> {
         }
     });
 
-    // Main menu loop
     loop {
         // Authentication menu
         println!("Welcome! Please choose an option:");
@@ -55,68 +56,68 @@ async fn main() -> io::Result<()> {
 
         match choice {
             "1" => {
-                // Multicast registration request
-                let (server_addr, assigned_port) = communication::multicast_request(
+                // Create the registration JSON payload
+                let register_json = json!({
+                    "type": "register"
+                });
+
+                // Multicast registration request with the JSON payload
+                let (server_addr, response_json) = communication::multicast_request_with_payload(
                     &socket,
-                    "register",
+                    register_json.to_string(),
                     &config.server_ips,
                     config.request_port,
                 )
                 .await?;
 
-                let target_server = format!("{}:{}", server_addr.ip(), assigned_port);
+                println!("Received response from server at {}: {}", server_addr, response_json);
 
-                // Create and send registration JSON
-                let auth_json = authentication::create_auth_json(None);
-                socket.send_to(auth_json.to_string().as_bytes(), &target_server).await?;
-                println!("Sent registration request to {}", target_server);
-
-                // Receive server response
-                let mut response_buffer = [0u8; 1024];
-                let (size, _) = socket.recv_from(&mut response_buffer).await?;
-                let response = String::from_utf8_lossy(&response_buffer[..size]);
-                println!("Registration response: {}", response);
-
-                if response.contains("user_id") {
-                    let parsed_response: serde_json::Value = serde_json::from_str(&response)?;
-                    if let Some(user_id) = parsed_response["user_id"].as_str() {
-                        authentication::save_user_id(user_id, Path::new("user.json"))?;
-                    } else {
-                        eprintln!("Error: Failed to retrieve user_id from response.");
-                    }
+                // Handle registration response
+                if let Some(user_id) = response_json.get("user_id").and_then(|id| id.as_u64()) {
+                    let user_id_str = user_id.to_string(); // Convert u64 to String for saving
+                    authentication::save_user_id(&user_id_str, Path::new("user.json"))?;
+                    println!("Registration successful! User ID: {}", user_id);
+                } else {
+                    eprintln!("Error: Failed to retrieve user_id from server response.");
                 }
-                println!("Registration successful! Returning to the main menu...");
+
+                println!("Returning to the main menu...");
             }
             "2" => {
+                print!("Enter your user ID: ");
+                io::stdout().flush()?;
+                let mut user_id_input = String::new();
+                io::stdin().read_line(&mut user_id_input)?;
+                let user_id_input = user_id_input.trim();
+
+                // Parse the user ID as u64
+                let user_id: u64 = match user_id_input.parse() {
+                    Ok(id) => id,
+                    Err(_) => {
+                        eprintln!("Invalid user ID. Please enter a numeric value.");
+                        continue; // Return to the main menu
+                    }
+                };
+
+                // Create the authentication JSON payload
+                let auth_json = json!({
+                    "type": "sign_in",
+                    "user_id": user_id
+                });
+
                 // Multicast sign-in request
-                let (server_addr, assigned_port) = communication::multicast_request(
+                let (server_addr, response_json) = communication::multicast_request_with_payload(
                     &socket,
-                    "auth",
+                    auth_json.to_string(),
                     &config.server_ips,
                     config.request_port,
                 )
                 .await?;
 
-                let target_server = format!("{}:{}", server_addr.ip(), assigned_port);
+                println!("Received response from server at {}: {}", server_addr, response_json);
 
-                // Sign In
-                print!("Enter your user ID: ");
-                io::stdout().flush()?;
-                let mut user_id = String::new();
-                io::stdin().read_line(&mut user_id)?;
-                let user_id = user_id.trim();
-
-                let auth_json = authentication::create_auth_json(Some(user_id));
-                socket.send_to(auth_json.to_string().as_bytes(), &target_server).await?;
-                println!("Sent sign-in request to {}", target_server);
-
-                // Handle server response
-                let mut response_buffer = [0u8; 1024];
-                let (size, _) = socket.recv_from(&mut response_buffer).await?;
-                let response = String::from_utf8_lossy(&response_buffer[..size]);
-                println!("Sign-in response: {}", response);
-
-                if response.contains("success") {
+                // Check for success in JSON response
+                if response_json.get("status") == Some(&serde_json::Value::String("success".to_string())) {
                     println!("Sign-in successful!");
 
                     // Main menu after successful sign-in
@@ -136,13 +137,65 @@ async fn main() -> io::Result<()> {
 
                         match menu_choice {
                             "1" => {
-                                //workflow::encode_image(&socket, &config).await?;
+                                // User input: image path and resource ID
+                                let mut input = String::new();
+                                print!("Enter the path to the image: ");
+                                io::stdout().flush()?;
+                                io::stdin().read_line(&mut input)?;
+                                let image_path = Path::new(input.trim());
+
+                                // Validate the image path
+                                if !image_path.exists() {
+                                    eprintln!("The specified image path does not exist.");
+                                    continue;
+                                }
+                                if !image_path.is_file() {
+                                    eprintln!("The specified path is not a file.");
+                                    continue;
+                                }
+
+                                // Generate a random resource ID
+                                let resource_id = Uuid::new_v4().to_string();
+                                println!("Generated unique resource ID: {}", resource_id);
+
+                                // Find the server handling the request
+                                if let Some((server_addr, port)) = workflow::find_server_for_resource(
+                                    &socket,
+                                    &config.server_ips,
+                                    config.request_port,
+                                    &resource_id,
+                                )
+                                .await?
+                                {
+                                    println!(
+                                        "Server {}:{} will handle the request for resource ID {}",
+                                        server_addr, port, resource_id
+                                    );
+
+                                    // Process the single image
+                                    workflow::process_image(
+                                        &socket,
+                                        image_path,
+                                        &server_addr,
+                                        port,
+                                        &resource_id,
+                                        &config.save_dir,
+                                    )
+                                    .await?;
+                                } else {
+                                    eprintln!("No server responded to the resource ID. Exiting.");
+                                }
                             }
                             "2" => {
                                 let active_users = workflow::get_active_users(&socket, &config).await?;
                                 println!("Active Users and Their Images:");
-                                for (peer, images) in active_users.iter() {
-                                    println!("{}: {:?}", peer, images);
+                                if active_users.is_empty() {
+                                    println!("No active users found.");
+                                } else {
+                                    for (peer, images) in active_users.iter() {
+                                        println!("Peer: {}", peer);
+                                        println!("Images: {:?}", images);
+                                    }
                                 }
                             }
                             "3" => {
@@ -152,33 +205,23 @@ async fn main() -> io::Result<()> {
                                 workflow::increase_image_views(&socket, &config).await?;
                             }
                             "5" => {
-                                // Shutdown request
-                                let (server_addr, assigned_port) =
-                                    communication::multicast_request(
+                                // Multicast shutdown request
+                                let shutdown_json = json!({
+                                    "type": "shutdown",
+                                    "user_id": user_id
+                                });
+
+                                let (server_addr, shutdown_response) =
+                                    communication::multicast_request_with_payload(
                                         &socket,
-                                        "shutdown",
+                                        shutdown_json.to_string(),
                                         &config.server_ips,
                                         config.request_port,
                                     )
                                     .await?;
 
-                                let target_server =
-                                    format!("{}:{}", server_addr.ip(), assigned_port);
-
-                                let shutdown_json = json!({
-                                    "type": "shutdown",
-                                    "user_id": user_id
-                                });
-                                socket
-                                    .send_to(shutdown_json.to_string().as_bytes(), &target_server)
-                                    .await?;
-                                println!("Sent shutdown request to {}", target_server);
-
-                                let mut response_buffer = [0u8; 1024];
-                                let (size, _) = socket.recv_from(&mut response_buffer).await?;
-                                let response =
-                                    String::from_utf8_lossy(&response_buffer[..size]);
-                                println!("Shutdown response: {}", response);
+                                println!("Sent shutdown request to {}", server_addr);
+                                println!("Shutdown response: {}", shutdown_response);
                                 break;
                             }
                             _ => {
