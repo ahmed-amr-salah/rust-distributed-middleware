@@ -29,7 +29,7 @@ use DOS::{register_user, sign_in_user, get_images_up, shutdown_client};
 // Constants
 const SERVER_ID: u32 = 1;          // Modify this for each server instance
 const HEARTBEAT_PORT: u16 = 8085;   // Port for both sending and receiving heartbeat messages
-const HEARTBEAT_PERIOD: u64 = 3;
+const HEARTBEAT_PERIOD: u64 = 2;
 
 
 
@@ -40,7 +40,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let local_addr: SocketAddr = "10.7.19.204:8081".parse().unwrap();
     let peer_addresses = vec![
         "10.7.19.18:8085".parse().unwrap(),
-        // "127.0.0.1:8085".parse().unwrap(),
+        "10.40.51.73:8085".parse().unwrap(),
     ];
 
     // Connect to the database
@@ -353,7 +353,7 @@ async fn send_heartbeat(heartbeat_socket: Arc<UdpSocket>, stats: Arc<Mutex<Serve
         if let Some(last_alive_time) = peer_alive.get(&peer_addr) {
             if let Ok(duration) = SystemTime::now().duration_since(*last_alive_time) {
                 if duration >= Duration::from_secs((3 * HEARTBEAT_PERIOD) / 2) {
-                    state.peer_priorities.insert(peer_addr, -1.0);
+                    state.peer_priorities.insert(peer_addr, 0.0);
                     // println!("Updated priority for {}: {:?}", peer_addr, state.peer_priorities.get(&peer_addr));
                 }
             }
