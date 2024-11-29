@@ -25,6 +25,9 @@ async fn main() -> io::Result<()> {
     let (p2p_tx, mut p2p_rx) = mpsc::channel(100);
     let p2p_socket = Arc::new(UdpSocket::bind("0.0.0.0:0").await?);
 
+    println!("P2P Socket {}", p2p_socket.local_addr()?);
+    println!("Socket {}", socket.local_addr()?);
+
     // Spawn P2P listener thread
     let p2p_socket_clone = Arc::clone(&p2p_socket);
     tokio::spawn(async move {
@@ -33,14 +36,63 @@ async fn main() -> io::Result<()> {
             if let Ok((size, src)) = p2p_socket_clone.recv_from(&mut buffer).await {
                 let request = String::from_utf8_lossy(&buffer[..size]).to_string();
                 println!("[P2P Listener] Received request: {} from {}", request, src);
-
-                // Forward request to the main thread via the channel
-                if let Err(e) = p2p_tx.send((src.to_string(), request)).await {
-                    eprintln!("[P2P Listener] Failed to send request to main thread: {}", e);
+            // Parse the request (assumes it's in JSON format)
+            if let Ok(request_json) = serde_json::from_str::<serde_json::Value>(&request) {
+                if let Some(request_type) = request_json.get("type").and_then(|t| t.as_str()) {
+                    match request_type {
+                        "image_request" => {
+                            if let Some(image_id) = request_json.get("image_id").and_then(|id| id.as_str()) {
+                                if let Some(requested_views) = request_json.get("views").and_then(|v| v.as_u64()) {
+                                    // Pass the requested views to respond_to_request
+                                    let views = requested_views as u16; // Convert to u32
+                                    if let Err(e) = p2p::respond_to_request(
+                                        &p2p_socket_clone,
+                                        image_id,
+                                        views,
+                                        &src.to_string(),
+                                    )
+                                    .await
+                                    {
+                                        eprintln!("[P2P Listener] Error responding to request: {}", e);
+                                    }
+                                } else {
+                                    eprintln!("[P2P Listener] Missing or invalid 'views' field in request");
+                                }
+                            } else {
+                                eprintln!("[P2P Listener] Missing 'image_id' in request");
+                            }
+                        }
+                        "image_response" => {
+                            if let Some(image_id) = request_json.get("image_id").and_then(|id| id.as_str()) {
+                                if let Some(encoded_data) = request_json.get("data").and_then(|d| d.as_str()) {
+                                    match base64::decode(encoded_data) {
+                                        Ok(image_data) => {
+                                            if let Err(e) = p2p::store_received_image(image_id, &image_data).await {
+                                                eprintln!("[P2P Listener] Failed to store image: {}", e);
+                                            }
+                                        }
+                                        Err(e) => eprintln!("[P2P Listener] Failed to decode image data: {}", e),
+                                    }
+                                } else {
+                                    eprintln!("[P2P Listener] Missing or invalid 'data' field in response");
+                                }
+                            } else {
+                                eprintln!("[P2P Listener] Missing 'image_id' in response");
+                            }
+                        }
+                        _ => {
+                            eprintln!("[P2P Listener] Unknown request type: {}", request_type);
+                        }
+                    }
+                } else {
+                    eprintln!("[P2P Listener] Malformed request: Missing 'type'");
                 }
+            } else {
+                eprintln!("[P2P Listener] Failed to parse request as JSON");
             }
         }
-    });
+    }
+});
 
     loop {
         // Authentication menu
@@ -199,10 +251,10 @@ async fn main() -> io::Result<()> {
                                 }
                             }
                             "3" => {
-                                workflow::request_image(&socket, &config, &peer_channel).await?;
+                                workflow::request_image(&p2p_socket, &config, &peer_channel).await?;
                             }
                             "4" => {
-                                workflow::increase_image_views(&socket, &config).await?;
+                                workflow::increase_image_views(&p2p_socket, &config).await?;
                             }
                             "5" => {
                                 // Multicast shutdown request

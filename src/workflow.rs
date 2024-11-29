@@ -211,7 +211,7 @@ pub async fn request_image(
     println!("Enter the number of views to request:");
     let mut views_input = String::new(); // Another new `String` to handle this input
     io::stdin().read_line(&mut views_input)?;
-    let views = views_input.trim().parse::<u32>().unwrap_or(0);
+    let views = views_input.trim().parse::<u16>().unwrap_or(0);
 
     // Send P2P request
     p2p::send_image_request(socket, peer_addr, &image_id, views).await?;
@@ -264,7 +264,7 @@ pub async fn increase_image_views(socket: &Arc<UdpSocket>, config: &Config) -> i
     println!("Enter the number of additional views:");
     input.clear();
     io::stdin().read_line(&mut input)?;
-    let views = input.trim().parse::<u32>().unwrap_or(0);
+    let views = input.trim().parse::<u16>().unwrap_or(0);
 
     // Create the JSON payload for the request
     let increase_views_json = json!({
