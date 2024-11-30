@@ -237,9 +237,9 @@ pub async fn respond_to_request(
     image_id: &str,
     requested_views: u16,
     peer_addr: &str,
+    approved: bool
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if requested_views < 10 {
-
+    if approved {
         let encoded_img = encode_access_rights(image_id, peer_addr, requested_views).await?;
         let buffer = tokio::task::spawn_blocking(move || {
             let mut buffer = Vec::new();
@@ -260,7 +260,8 @@ pub async fn respond_to_request(
     } else {
         let response = json!({
             "type": "image_rejection",
-            "reason": "Not enough rights or unavailable"
+            "views": requested_views,
+            "image_id": image_id
         });
 
         socket.send_to(response.to_string().as_bytes(), peer_addr).await?;
@@ -275,34 +276,24 @@ pub async fn respond_to_increase_views(
     image_id: &str,
     requested_views: u16,
     peer_addr: &str,
+    approved: bool
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if requested_views < 10 {
 
-        let encoded_img = encode_access_rights(image_id, peer_addr, requested_views).await?;
-        let buffer = tokio::task::spawn_blocking(move || {
-            let mut buffer = Vec::new();
-            encoded_img
-                .write_to(&mut Cursor::new(&mut buffer), ImageOutputFormat::PNG)
-                .expect("Failed to write image to buffer");
-            buffer // Return the buffer
-        })
-        .await?;
-        let peer_ip = peer_addr.split(':').next().unwrap();
-        let peer_port: u16 = peer_addr.split(':').nth(1).unwrap().parse()?;
-
-        println!("In respond_to_request: {}:{}", peer_ip , peer_port);
-
-        send_image_payload_over_udp(socket, image_id, requested_views, buffer, peer_ip, peer_port)
-            .await?;
-        println!("Approved request for {} views", requested_views);
-    } else {
+    if approved {
         let response = json!({
-            "type": "image_rejection",
-            "reason": "Not enough rights or unavailable"
+            "type": "increase_approved",
+            "views" : requested_views,
+            "image_id": image_id
         });
-
         socket.send_to(response.to_string().as_bytes(), peer_addr).await?;
-        println!("Rejected request for image {}", image_id);
+    }
+    else {
+        let response = json!({
+            "type": "increase_rejected",
+            "views" : requested_views,
+            "image_id": image_id
+        });
+        socket.send_to(response.to_string().as_bytes(), peer_addr).await?;
     }
     Ok(())
 }

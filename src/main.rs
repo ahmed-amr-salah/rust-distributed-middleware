@@ -7,6 +7,7 @@ use tokio::sync::Mutex;
 use serde_json::json;
 use uuid::Uuid;
 use std::fs;
+use std::collections::VecDeque;
 
 mod authentication;
 mod communication;
@@ -21,6 +22,7 @@ async fn main() -> io::Result<()> {
     // Load environment variables and configuration
     let config = config::load_config();
     let socket = Arc::new(UdpSocket::bind("0.0.0.0:0").await?); // Wrap in Arc
+    let request_queue = Arc::new(Mutex::new(VecDeque::new()));
 
     // P2P communication setup
     let (p2p_tx, mut p2p_rx) = mpsc::channel(100);
@@ -29,41 +31,55 @@ async fn main() -> io::Result<()> {
     println!("P2P Socket {}", p2p_socket.local_addr()?);
     println!("Socket {}", socket.local_addr()?);
 
-    // Spawn P2P listener task
+    let queue_clone = Arc::clone(&request_queue);
     let p2p_socket_clone = Arc::clone(&p2p_socket);
     tokio::spawn(async move {
         let mut buffer = [0u8; 1024];
         loop {
-             println!("Hellooo");
             if let Ok((size, src)) = p2p_socket_clone.recv_from(&mut buffer).await {
                 let request = String::from_utf8_lossy(&buffer[..size]).to_string();
                 println!("[P2P Listener] Received request: {} from {}", request, src);
 
-                if let Ok(request_json) = serde_json::from_str::<serde_json::Value>(&request) {
-                    if let Some(request_type) = request_json.get("type").and_then(|t| t.as_str()) {
-                        match request_type {
-                            "image_request" => {
-                                if let Some(image_id) = request_json.get("image_id").and_then(|id| id.as_str()) {
-                                    if let Some(requested_views) = request_json.get("views").and_then(|v| v.as_u64()) {
-                                        let views = requested_views as u16;
-                                        println!("received request for image from {}", src.to_string());
-                                        if let Err(e) = p2p::respond_to_request(
-                                            &p2p_socket_clone,
-                                            image_id,
-                                            views,
-                                            &src.to_string(),
-                                        )
-                                        .await
-                                        {
-                                            eprintln!("[P2P Listener] Error responding to request: {}", e);
-                                        }
-                                    } else {
-                                        eprintln!("[P2P Listener] Missing or invalid 'views' field in request");
-                                    }
-                                } else {
-                                    eprintln!("[P2P Listener] Missing 'image_id' in request");
-                                }
-                            }
+                let mut queue = queue_clone.lock().await;
+                queue.push_back((src, request));
+            }
+        }
+    });
+    // Spawn P2P listener task
+    // let p2p_socket_clone = Arc::clone(&p2p_socket);
+    // tokio::spawn(async move {
+    //     let mut buffer = [0u8; 1024];
+    //     loop {
+    //          println!("Hellooo");
+    //         if let Ok((size, src)) = p2p_socket_clone.recv_from(&mut buffer).await {
+    //             let request = String::from_utf8_lossy(&buffer[..size]).to_string();
+    //             println!("[P2P Listener] Received request: {} from {}", request, src);
+
+    //             if let Ok(request_json) = serde_json::from_str::<serde_json::Value>(&request) {
+    //                 if let Some(request_type) = request_json.get("type").and_then(|t| t.as_str()) {
+    //                     match request_type {
+    //                         "image_request" => {
+    //                             if let Some(image_id) = request_json.get("image_id").and_then(|id| id.as_str()) {
+    //                                 if let Some(requested_views) = request_json.get("views").and_then(|v| v.as_u64()) {
+    //                                     let views = requested_views as u16;
+    //                                     println!("received request for image from {}", src.to_string());
+    //                                     if let Err(e) = p2p::respond_to_request(
+    //                                         &p2p_socket_clone,
+    //                                         image_id,
+    //                                         views,
+    //                                         &src.to_string(),
+    //                                     )
+    //                                     .await
+    //                                     {
+    //                                         eprintln!("[P2P Listener] Error responding to request: {}", e);
+    //                                     }
+    //                                 } else {
+    //                                     eprintln!("[P2P Listener] Missing or invalid 'views' field in request");
+    //                                 }
+    //                             } else {
+    //                                 eprintln!("[P2P Listener] Missing 'image_id' in request");
+    //                             }
+    //                         }
                             // "image_response" => {
                             //     if let Some(image_id) = request_json.get("image_id").and_then(|id| id.as_str()) {
                             //         if let Some(encoded_data) = request_json.get("data").and_then(|d| d.as_str()) {
@@ -82,17 +98,17 @@ async fn main() -> io::Result<()> {
                             //         eprintln!("[P2P Listener] Missing 'image_id' in response");
                             //     }
                             // }
-                            _ => eprintln!("[P2P Listener] Unknown request type: {}", request_type),
-                        }
-                    } else {
-                        eprintln!("[P2P Listener] Malformed request: Missing 'type'");
-                    }
-                } else {
-                    eprintln!("[P2P Listener] Failed to parse request as JSON");
-                }
-            }
-        }
-    });
+    //                         _ => eprintln!("[P2P Listener] Unknown request type: {}", request_type),
+    //                     }
+    //                 } else {
+    //                     eprintln!("[P2P Listener] Malformed request: Missing 'type'");
+    //                 }
+    //             } else {
+    //                 eprintln!("[P2P Listener] Failed to parse request as JSON");
+    //             }
+    //         }
+    //     }
+    // });
 
     loop {
         // Authentication menu
@@ -183,7 +199,8 @@ async fn main() -> io::Result<()> {
                         println!("2. Request List of Active Users and Their Images");
                         println!("3. Request Image From Active User");
                         println!("4. Increase Views of Image From Active User");
-                        println!("5. Shutdown");
+                        println!("5. View Client Requests");
+                        println!("6. Shutdown");
                         print!("Enter your choice: ");
                         io::stdout().flush()?;
                         let mut menu_choice = String::new();
@@ -289,6 +306,199 @@ async fn main() -> io::Result<()> {
                                 workflow::increase_image_views(&p2p_socket, &config).await?;
                             }
                             "5" => {
+                                // REQUESTS QUEUE HANDLING LOGIC HERE
+                                let mut queue = request_queue.lock().await;
+                                if queue.is_empty() {
+                                    println!("Request queue is empty.");
+                                } else {
+                                    println!("Request Queue:");
+                                    for (index, (src, request)) in queue.iter().enumerate() {
+                                        println!("{}. [{}] {}", index + 1, src, request);
+                                    }
+
+                                    println!("Enter the number of the request to handle, or '0' to go back:");
+                                    let mut input = String::new();
+                                    io::stdin().read_line(&mut input)?;
+                                    let input = input.trim();
+
+                                    match input.parse::<usize>() {
+                                        Ok(0) => continue, // Go back to the main menu
+                                        Ok(index) if index > 0 && index <= queue.len() => {
+                                            let (src, request) = queue.remove(index - 1).unwrap();
+                                            println!("Selected request: [{}] {}", src, request);
+
+                                            println!("Options:");
+                                            println!("1. Approve");
+                                            println!("2. Reject");
+                                            println!("3. Go back");
+                                            print!("Enter your choice: ");
+                                            io::stdout().flush()?;
+
+                                            let mut action = String::new();
+                                            io::stdin().read_line(&mut action)?;
+                                            let action = action.trim();
+
+                                            match action {
+                                                "1" => {
+                                                    println!("Approved request from {}: {}", src, request);
+                                                    // Parse the request JSON
+                                                    if let Ok(request_json) = serde_json::from_str::<serde_json::Value>(&request) {
+                                                        if let Some(request_type) = request_json.get("type").and_then(|t| t.as_str()) {
+                                                            match request_type {
+                                                                "image_request" => {
+                                                                    if let Some(image_id) = request_json.get("image_id").and_then(|id| id.as_str()) {
+                                                                        if let Some(requested_views) = request_json.get("views").and_then(|v| v.as_u64()) {
+                                                                            let views = requested_views as u16;
+                                                                            println!("Processing 'image_request' for image_id: {}, views: {}", image_id, views);
+
+                                                                            // Call the appropriate function to handle the image request
+                                                                            if let Err(e) = p2p::respond_to_request(
+                                                                                &p2p_socket,
+                                                                                image_id,
+                                                                                views,
+                                                                                &src.to_string(),
+                                                                                true
+                                                                            )
+                                                                            .await
+                                                                            {
+                                                                                eprintln!("[Request Handler] Error responding to request: {}", e);
+                                                                            } else {
+                                                                                println!("[Request Handler] Successfully handled 'image_request'.");
+                                                                            }
+                                                                        } else {
+                                                                            eprintln!("[Request Handler] Missing or invalid 'views' field in 'image_request'");
+                                                                        }
+                                                                    } else {
+                                                                        eprintln!("[Request Handler] Missing 'image_id' field in 'image_request'");
+                                                                    }
+                                                                }
+                                                                "increase_views" => {
+                                                                    if let Some(image_id) = request_json.get("image_id").and_then(|id| id.as_str()) {
+                                                                        if let Some(requested_views) = request_json.get("views").and_then(|v| v.as_u64()) {
+                                                                            let views = requested_views as u16;
+                                                                            println!("Processing 'image_request' for image_id: {}, views: {}", image_id, views);
+
+                                                                            // Call the appropriate function to handle the image request
+                                                                            if let Err(e) = p2p::respond_to_increase_views(
+                                                                                &p2p_socket,
+                                                                                image_id,
+                                                                                views,
+                                                                                &src.to_string(),
+                                                                                true
+                                                                            )
+                                                                            .await
+                                                                            {
+                                                                                eprintln!("[Request Handler] Error responding to request: {}", e);
+                                                                            } else {
+                                                                                println!("[Request Handler] Successfully handled 'image_request'.");
+                                                                            }
+                                                                        } else {
+                                                                            eprintln!("[Request Handler] Missing or invalid 'views' field in 'image_request'");
+                                                                        }
+                                                                    } else {
+                                                                        eprintln!("[Request Handler] Missing 'image_id' field in 'image_request'");
+                                                                    }
+                                                                }
+                                                                // Add more request types as needed
+                                                                "another_request_type" => {
+                                                                    println!("Processing 'another_request_type': {:?}", request_json);
+                                                                    // Add logic for handling 'another_request_type'
+                                                                }
+                                                                _ => eprintln!("[Request Handler] Unknown request type: {}", request_type),
+                                                            }
+                                                        } else {
+                                                            eprintln!("[Request Handler] Malformed request: Missing 'type'");
+                                                        }
+                                                    } else {
+                                                        eprintln!("[Request Handler] Failed to parse request as JSON");
+                                                    }
+                                                }
+                                                "2" => {
+                                                    println!("Rejected request from {}: {}", src, request);
+                                                    // Parse the request JSON
+                                                    if let Ok(request_json) = serde_json::from_str::<serde_json::Value>(&request) {
+                                                        if let Some(request_type) = request_json.get("type").and_then(|t| t.as_str()) {
+                                                            match request_type {
+                                                                "image_request" => {
+                                                                    if let Some(image_id) = request_json.get("image_id").and_then(|id| id.as_str()) {
+                                                                        if let Some(requested_views) = request_json.get("views").and_then(|v| v.as_u64()) {
+                                                                            let views = requested_views as u16;
+                                                                            println!("Processing 'image_request' for image_id: {}, views: {}", image_id, views);
+
+                                                                            // Call the appropriate function to handle the image request
+                                                                            if let Err(e) = p2p::respond_to_request(
+                                                                                &p2p_socket,
+                                                                                image_id,
+                                                                                views,
+                                                                                &src.to_string(),
+                                                                                false
+                                                                            )
+                                                                            .await
+                                                                            {
+                                                                                eprintln!("[Request Handler] Error responding to request: {}", e);
+                                                                            } else {
+                                                                                println!("[Request Handler] Successfully handled 'image_request'.");
+                                                                            }
+                                                                        } else {
+                                                                            eprintln!("[Request Handler] Missing or invalid 'views' field in 'image_request'");
+                                                                        }
+                                                                    } else {
+                                                                        eprintln!("[Request Handler] Missing 'image_id' field in 'image_request'");
+                                                                    }
+                                                                }
+                                                                "increase_views" => {
+                                                                    if let Some(image_id) = request_json.get("image_id").and_then(|id| id.as_str()) {
+                                                                        if let Some(requested_views) = request_json.get("views").and_then(|v| v.as_u64()) {
+                                                                            let views = requested_views as u16;
+                                                                            println!("Processing 'image_request' for image_id: {}, views: {}", image_id, views);
+
+                                                                            // Call the appropriate function to handle the image request
+                                                                            if let Err(e) = p2p::respond_to_increase_views(
+                                                                                &p2p_socket,
+                                                                                image_id,
+                                                                                views,
+                                                                                &src.to_string(),
+                                                                                false
+                                                                            )
+                                                                            .await
+                                                                            {
+                                                                                eprintln!("[Request Handler] Error responding to request: {}", e);
+                                                                            } else {
+                                                                                println!("[Request Handler] Successfully handled 'image_request'.");
+                                                                            }
+                                                                        } else {
+                                                                            eprintln!("[Request Handler] Missing or invalid 'views' field in 'image_request'");
+                                                                        }
+                                                                    } else {
+                                                                        eprintln!("[Request Handler] Missing 'image_id' field in 'image_request'");
+                                                                    }
+                                                                }
+                                                                // Add more request types as needed
+                                                                "another_request_type" => {
+                                                                    println!("Processing 'another_request_type': {:?}", request_json);
+                                                                    // Add logic for handling 'another_request_type'
+                                                                }
+                                                                _ => eprintln!("[Request Handler] Unknown request type: {}", request_type),
+                                                            }
+                                                        } else {
+                                                            eprintln!("[Request Handler] Malformed request: Missing 'type'");
+                                                        }
+                                                    } else {
+                                                        eprintln!("[Request Handler] Failed to parse request as JSON");
+                                                    }
+                                                },
+                                                "3" => {
+                                                    println!("Returning to queue...");
+                                                    queue.push_front((src, request)); // Return the request to the front of the queue
+                                                }
+                                                _ => println!("Invalid choice. Returning to queue..."),
+                                            }
+                                        }
+                                        _ => println!("Invalid selection. Please enter a valid number."),
+                                    }
+                                }
+                            } 
+                            "6" => {
                                 // Multicast shutdown request
                                 let shutdown_json = json!({
                                     "type": "shutdown",
