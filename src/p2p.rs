@@ -134,21 +134,21 @@ pub async fn send_image_payload_over_udp(
             socket.send_to(&packet, (dest_ip, port)).await?;
             println!("Sent chunk {}/{}", i + 1, total_chunks);
 
-            let mut ack_buf = [0u8; 4];
-            match timeout(Duration::from_secs(2), socket.recv_from(&mut ack_buf)).await {
-                Ok(Ok((size, _))) if size == 4 => {
-                    let ack_id = u32::from_be_bytes(ack_buf);
-                    if ack_id == i as u32 {
-                        println!("Received acknowledgment for chunk {}", i + 1);
-                        break;
-                    } else {
-                        println!("Mismatched acknowledgment, retrying...");
-                    }
-                }
-                _ => {
-                    println!("No acknowledgment for chunk {}, retrying...", i + 1);
-                }
-            }
+            // let mut ack_buf = [0u8; 4];
+            // match timeout(Duration::from_secs(2), socket.recv_from(&mut ack_buf)).await {
+            //     Ok(Ok((size, _))) if size == 4 => {
+            //         let ack_id = u32::from_be_bytes(ack_buf);
+            //         if ack_id == i as u32 {
+            //             println!("Received acknowledgment for chunk {}", i + 1);
+            //             break;
+            //         } else {
+            //             println!("Mismatched acknowledgment, retrying...");
+            //         }
+            //     }
+            //     _ => {
+            //         println!("No acknowledgment for chunk {}, retrying...", i + 1);
+            //     }
+            // }
         }
     }
 
@@ -232,8 +232,8 @@ pub async fn receive_encrypted_image_from_client(socket: &UdpSocket) -> io::Resu
             received_chunks[chunk_id as usize] = data_chunk.to_vec();
 
             // Send acknowledgment for the received chunk
-            socket.send_to(&chunk_id.to_be_bytes(), src_addr).await?;
-            println!("Acknowledgment sent for chunk ID: {}", chunk_id);
+            // socket.send_to(&chunk_id.to_be_bytes(), src_addr).await?;
+            // println!("Acknowledgment sent for chunk ID: {}", chunk_id);
         } else {
             println!("Received malformed packet with size {}", size);
         }
