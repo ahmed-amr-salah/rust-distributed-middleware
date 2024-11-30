@@ -45,6 +45,7 @@ async fn main() -> io::Result<()> {
                                 if let Some(image_id) = request_json.get("image_id").and_then(|id| id.as_str()) {
                                     if let Some(requested_views) = request_json.get("views").and_then(|v| v.as_u64()) {
                                         let views = requested_views as u16;
+                                        println!("received request for image from {}", src.to_string());
                                         if let Err(e) = p2p::respond_to_request(
                                             &p2p_socket_clone,
                                             image_id,
@@ -252,7 +253,7 @@ async fn main() -> io::Result<()> {
                                 }
                             }
                             "3" => {
-                                workflow::request_image(&socket, &config, &peer_channel).await?;
+                                workflow::request_image(&p2p_socket, &config, &peer_channel).await?;
                             }
                             "4" => {
                                 workflow::increase_image_views(&p2p_socket, &config).await?;

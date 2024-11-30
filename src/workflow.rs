@@ -216,6 +216,7 @@ pub async fn request_image(
     let p2p_socket_response = Arc::new(UdpSocket::bind("0.0.0.0:0").await?);
 
     // Send P2P request
+    println!("Sending request using {}", p2p_socket_response.local_addr().unwrap());
     p2p::send_image_request(&p2p_socket_response, peer_addr, &image_id, views).await?;
 
     println!("Request sent to peer {} for image {}", peer_addr, image_id);

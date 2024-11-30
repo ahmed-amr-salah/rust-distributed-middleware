@@ -40,7 +40,7 @@ pub async fn send_image_request(
 
     //LISTEN TO REQUESTED IMAGE
 
-    receive_encrypted_image(socket);
+    receive_encrypted_image(socket).await?;
 
     Ok(())
 }
@@ -63,14 +63,18 @@ pub async fn encode_access_rights(
     })
     .await??;
 
+    println!("IN ENCODE: num_views = {}", num_views);
+
+    // Get the byte representation of `num_views`
     let binary_data = num_views.to_be_bytes();
 
-    // Encode the binary data
+    // Encode the byte data directly into the image
     let encoder = Encoder::new(&binary_data, image);
     let encoded_image = encoder.encode_alpha();
 
     Ok(DynamicImage::ImageRgba8(encoded_image))
 }
+
 
 pub async fn decode_access_rights(
     encoded_image: DynamicImage,
@@ -82,12 +86,15 @@ pub async fn decode_access_rights(
     })
     .await?;
 
-    // Convert the binary data to a u16 value
-    let decoded_value = decoded_data
-        .iter()
-        .take(16)
-        .fold(0, |acc, &bit| (acc << 1) | bit as u16);
+    // Ensure that we have at least 2 bytes of data
+    if decoded_data.len() < 2 {
+        return Err("Decoded data is too short".into());
+    }
 
+    // Convert the first 2 bytes back into a `u16` value
+    let decoded_value = u16::from_be_bytes([decoded_data[0], decoded_data[1]]);
+
+    println!("DECODED: num_views = {}", decoded_value);
     Ok(decoded_value)
 }
 
@@ -151,6 +158,8 @@ pub async fn send_image_payload_over_udp(
 pub async fn receive_encrypted_image(socket: &UdpSocket) -> io::Result<()> {
     let mut buffer = [0u8; 1024];
     let mut received_chunks = Vec::new();
+
+    println!("RECEIVED_ENCRYPTED_IMAGE_IS_CALLED");
 
     println!("Waiting to receive the encrypted image payload...");
 
@@ -240,6 +249,8 @@ pub async fn respond_to_request(
         .await?;
         let peer_ip = peer_addr.split(':').next().unwrap();
         let peer_port: u16 = peer_addr.split(':').nth(1).unwrap().parse()?;
+
+        println!("In respond_to_request: {}:{}", peer_ip , peer_port);
 
         send_image_payload_over_udp(socket, image_id, requested_views, buffer, peer_ip, peer_port)
             .await?;
