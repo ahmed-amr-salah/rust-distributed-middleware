@@ -226,7 +226,7 @@ pub async fn request_image(
 }
 
 
-pub async fn increase_image_views(socket: &Arc<UdpSocket>, config: &Config) -> io::Result<()> {
+pub async fn request_increase_image_views(socket: &Arc<UdpSocket>, config: &Config) -> io::Result<()> {
     let dir = Path::new("../Peer_Images");
     let json_file_path = dir.join("images_views.json");    
     // Retrieve the peer images I currently have and their views
@@ -300,7 +300,7 @@ pub async fn increase_image_views(socket: &Arc<UdpSocket>, config: &Config) -> i
 
     // Create the JSON payload for the request
     let increase_views_json = json!({
-        "type": "increase_views",
+        "type": "increase_views_request",
         "image_id": image_id,
         "views": views,
         "user_id": user_id

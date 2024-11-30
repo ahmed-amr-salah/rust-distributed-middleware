@@ -197,29 +197,56 @@ pub async fn receive_encrypted_image_from_client(socket: &UdpSocket) -> io::Resu
 
     // Combine all chunks to reconstruct the payload
     let payload = received_chunks.concat();
-    let payload_str = String::from_utf8(payload).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    let payload_str = String::from_utf8(payload)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
     // Parse the JSON payload
     let response: serde_json::Value = serde_json::from_str(&payload_str)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
-    // Extract image ID and data from the payload
-    let image_id = response["image_id"].as_str()
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "Missing image ID"))?;
-    let encoded_data = response["data"].as_str()
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "Missing image data"))?;
+    // Check for rejection response
+    if let Some(response_type) = response["type"].as_str() {
+        match response_type {
+            "image_rejection" => {
+                let image_id = response["image_id"]
+                    .as_str()
+                    .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "Missing image ID"))?;
+                let requested_views = response["views"]
+                    .as_u64()
+                    .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "Missing views"))?;
 
-    // Decode the base64 image data
-    let image_data = base64::decode(encoded_data)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+                println!(
+                    "Received rejection response for image '{}' with requested views: {}",
+                    image_id, requested_views
+                );
+                return Ok(()); // Exit early since no image chunks will be processed
+            }
+            "image_response" => {
+                // Handle the regular image response
+                let image_id = response["image_id"].as_str()
+                    .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "Missing image ID"))?;
+                let encoded_data = response["data"].as_str()
+                    .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "Missing image data"))?;
 
-    // Call the `store_received_image` function to handle saving the image and metadata
-    if let Err(err) = store_received_image(image_id, &image_data).await {
-        println!("Failed to store image {}: {}", image_id, err);
-        return Err(std::io::Error::new(std::io::ErrorKind::Other, "Failed to store received image"));
+                // Decode the base64 image data
+                let image_data = base64::decode(encoded_data)
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+
+                // Call the `store_received_image` function to handle saving the image and metadata
+                if let Err(err) = store_received_image(image_id, &image_data).await {
+                    println!("Failed to store image {}: {}", image_id, err);
+                    return Err(std::io::Error::new(std::io::ErrorKind::Other, "Failed to store received image"));
+                }
+
+                println!("Encrypted image received and processed successfully.");
+            }
+            _ => {
+                println!("Unknown response type: {}", response_type);
+            }
+        }
+    } else {
+        println!("Malformed response: Missing 'type' field.");
     }
-
-    println!("Encrypted image received and processed successfully.");
 
     Ok(())
 }
@@ -356,3 +383,6 @@ pub async fn store_received_image(
     Ok(())
 }
 
+pub async fn handle_increase_views_response(){
+
+}

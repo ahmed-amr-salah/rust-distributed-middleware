@@ -303,7 +303,7 @@ async fn main() -> io::Result<()> {
                                 workflow::request_image(&p2p_socket, &config, &peer_channel).await?;
                             }
                             "4" => {
-                                workflow::increase_image_views(&p2p_socket, &config).await?;
+                                workflow::request_increase_image_views(&p2p_socket, &config).await?;
                             }
                             "5" => {
                                 // REQUESTS QUEUE HANDLING LOGIC HERE
@@ -372,7 +372,7 @@ async fn main() -> io::Result<()> {
                                                                         eprintln!("[Request Handler] Missing 'image_id' field in 'image_request'");
                                                                     }
                                                                 }
-                                                                "increase_views" => {
+                                                                "increase_views_request" => {
                                                                     if let Some(image_id) = request_json.get("image_id").and_then(|id| id.as_str()) {
                                                                         if let Some(requested_views) = request_json.get("views").and_then(|v| v.as_u64()) {
                                                                             let views = requested_views as u16;
