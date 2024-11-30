@@ -237,6 +237,8 @@ async fn main() -> io::Result<()> {
                                 
                                 // Create the concatenated resource ID
                                 let resource_id = format!("client{}-{}", user_id, resource_name);
+                                // create json as string that has used_id and resource_id
+                                let welcome_message = format!("{},{}", user_id, resource_id);
 
                                 println!("Concatenated Resource ID: {}", resource_id);
 
@@ -245,7 +247,7 @@ async fn main() -> io::Result<()> {
                                     &socket,
                                     &config.server_ips,
                                     config.request_port,
-                                    &resource_id,
+                                    &welcome_message,
                                 )
                                 .await?
                                 {

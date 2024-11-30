@@ -26,15 +26,15 @@ pub async fn find_server_for_resource(
     socket: &UdpSocket,
     server_ips: &[String],
     request_port: u16,
-    resource_id: &str,
+    welcome_message: &str,
 ) -> io::Result<Option<(String, u16)>> {
     let mut buffer = [0u8; 2];
 
     // Send the resource ID to all servers
     for server_ip in server_ips {
         let server_addr = format!("{}:{}", server_ip, request_port);
-        socket.send_to(resource_id.as_bytes(), &server_addr).await?;
-        println!("Sent resource ID {} to server at {}", resource_id, server_addr);
+ 
+        socket.send_to(welcome_message.as_bytes(), &server_addr).await?;
     }
 
     // Wait for a response
@@ -226,8 +226,6 @@ pub async fn request_image(
 }
 
 
-
-
 pub async fn increase_image_views(socket: &Arc<UdpSocket>, config: &Config) -> io::Result<()> {
     let dir = Path::new("../Peer_Images");
     let json_file_path = dir.join("images_views.json");    
@@ -269,11 +267,31 @@ pub async fn increase_image_views(socket: &Arc<UdpSocket>, config: &Config) -> i
     io::stdin().read_line(&mut input)?;
     let image_id = input.trim().to_string();
 
+    // Check if the entered image_id exists in image_views.json
+    if !image_views.contains_key(&image_id) {
+        println!("The entered image ID does not exist in your local resources (image_views.json).");
+        return Ok(());
+    }
+
+    // Check if the image_id is valid for the selected peer
     if !images.contains(&image_id) {
         println!("Invalid image ID.");
         return Ok(());
     }
-
+    
+    let user_id: String = match fs::read_to_string("../user.json").await {
+        Ok(contents) => {
+            let json: serde_json::Value = serde_json::from_str(&contents).unwrap_or_default();
+            json.get("user_id")
+                .and_then(|id| id.as_str()) // Convert to &str
+                .map(|id| id.to_string()) // Convert to String
+                .unwrap_or_else(|| "0".to_string()) // Fallback to "0" as a String
+        }
+        Err(_) => {
+            eprintln!("Failed to read user.json or user_id not found. Using default user_id = 0.");
+            "0".to_string() // Fallback to "0" as a String
+        }
+    };
     // Prompt the user to specify additional views
     println!("Enter the number of additional views:");
     input.clear();
@@ -284,7 +302,8 @@ pub async fn increase_image_views(socket: &Arc<UdpSocket>, config: &Config) -> i
     let increase_views_json = json!({
         "type": "increase_views",
         "image_id": image_id,
-        "views": views
+        "views": views,
+        "user_id": user_id
     });
 
     // Send the P2P request to the selected peer
