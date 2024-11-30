@@ -14,7 +14,7 @@ use image::ImageFormat;
 use tokio::task;
 use crate::config::load_config;
 use tokio::time::{timeout, Duration};
-
+use std::io;
 /// Sends an image request to another peer.
 ///
 /// # Arguments
@@ -28,6 +28,7 @@ pub async fn send_image_request(
     image_id: &str,
     requested_views: u16,
 ) -> Result<(), std::io::Error> { // Updated return type
+
     let request = json!({
         "type": "image_request",
         "image_id": image_id,
@@ -36,6 +37,11 @@ pub async fn send_image_request(
 
     socket.send_to(request.to_string().as_bytes(), peer_addr).await?;
     println!("Sent image request to {}", peer_addr);
+
+    //LISTEN TO REQUESTED IMAGE
+
+    receive_encrypted_image(socket);
+
     Ok(())
 }
 
@@ -96,7 +102,7 @@ pub async fn send_image_payload_over_udp(
 ) -> Result<(), std::io::Error> { // Specify the Result type here
     // Prepare the JSON payload
     let response = json!({
-        "type": "image_response",
+        // "type": "image_response",
         "image_id": image_id,
         "requested_views": requested_views,
         "data": base64::encode(&buffer)
@@ -142,72 +148,67 @@ pub async fn send_image_payload_over_udp(
     Ok(())
 }
 
-
-pub async fn receive_image_payload_over_udp(
-    socket: Arc<UdpSocket>,
-) -> Result<(), Box<dyn Error>> {
-    let mut received_chunks: HashMap<u32, Vec<u8>> = HashMap::new();
+pub async fn receive_encrypted_image(socket: &UdpSocket) -> io::Result<()> {
     let mut buffer = [0u8; 1024];
-    let mut max_chunk_id = None;
+    let mut received_chunks = Vec::new();
+
+    println!("Waiting to receive the encrypted image payload...");
 
     loop {
-        // Receive a chunk
-        let (size, src) = socket.recv_from(&mut buffer).await?;
+        // Receive a packet
+        let (size, src_addr) = socket.recv_from(&mut buffer).await?;
 
+        // If an empty packet is received, it signals the end of the transmission
         if size == 0 {
-            println!("End of transmission signal received from {}", src);
+            println!("End of transmission signal received from the server.");
             break;
         }
 
-        // Extract chunk ID and data
-        let chunk_id = u32::from_be_bytes(buffer[..4].try_into()?);
-        let chunk_data = &buffer[4..size];
-        received_chunks.insert(chunk_id, chunk_data.to_vec());
+        // Extract the chunk ID and payload from the packet
+        if size >= 4 {
+            let chunk_id = u32::from_be_bytes(buffer[..4].try_into().unwrap());
+            let data_chunk = &buffer[4..size];
+            println!("Received chunk ID: {} with size {} bytes", chunk_id, data_chunk.len());
 
-        // Send acknowledgment
-        socket.send_to(&chunk_id.to_be_bytes(), &src).await?;
-
-        // Parse chunk to check for total chunks
-        if max_chunk_id.is_none() {
-            if let Ok(payload) = serde_json::from_slice::<Value>(chunk_data) {
-                if let Some(total_chunks) = payload.get("total_chunks").and_then(|v| v.as_u64()) {
-                    max_chunk_id = Some(total_chunks as u32 - 1);
-                }
+            // Store the received data chunk
+            while received_chunks.len() <= chunk_id as usize {
+                received_chunks.push(Vec::new());
             }
-        }
+            received_chunks[chunk_id as usize] = data_chunk.to_vec();
 
-        // If max_chunk_id is known and all chunks are received, break
-        if let Some(max_id) = max_chunk_id {
-            if received_chunks.len() as u32 > max_id {
-                break;
-            }
-        }
-    }
-
-    // Reassemble the payload
-    let mut complete_payload = Vec::new();
-    for i in 0..=received_chunks.len() as u32 {
-        if let Some(chunk) = received_chunks.get(&i) {
-            complete_payload.extend_from_slice(chunk);
+            // Send acknowledgment for the received chunk
+            socket.send_to(&chunk_id.to_be_bytes(), src_addr).await?;
+            println!("Acknowledgment sent for chunk ID: {}", chunk_id);
         } else {
-            return Err(format!("Missing chunk {}", i).into());
+            println!("Received malformed packet with size {}", size);
         }
     }
 
-    // Decode the JSON payload
-    let payload: Value = serde_json::from_slice(&complete_payload)?;
-    if let Some(image_id) = payload.get("image_id").and_then(|id| id.as_str()) {
-        if let Some(data) = payload.get("data").and_then(|d| d.as_str()) {
-            let decoded_data = base64::decode(data)?;
+    // Combine all chunks to reconstruct the payload
+    let payload = received_chunks.concat();
+    let payload_str = String::from_utf8(payload).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
-            // Call store_received_image
-            store_received_image(image_id, &decoded_data).await?;
-        } else {
-            eprintln!("Payload missing 'data' field");
-        }
-    } else {
-        eprintln!("Payload missing 'image_id' field");
+    // Parse the JSON payload
+    let response: serde_json::Value = serde_json::from_str(&payload_str)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+
+    // Extract image ID and data from the payload
+    let image_id = response["image_id"].as_str()
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "Missing image ID"))?;
+    let encoded_data = response["data"].as_str()
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "Missing image data"))?;
+
+    // Decode the base64 image data
+    let image_data = base64::decode(encoded_data)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+
+    // Call the `store_received_image` function to handle saving the image and metadata
+    if let Err(err) = store_received_image(image_id, &image_data).await {
+        println!("Failed to store image {}: {}", image_id, err);
+        return Err(std::io::Error::new(std::io::ErrorKind::Other, "Failed to store received image"));
     }
+
+    println!("Encrypted image received and processed successfully.");
 
     Ok(())
 }

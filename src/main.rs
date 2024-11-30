@@ -62,24 +62,24 @@ async fn main() -> io::Result<()> {
                                     eprintln!("[P2P Listener] Missing 'image_id' in request");
                                 }
                             }
-                            "image_response" => {
-                                if let Some(image_id) = request_json.get("image_id").and_then(|id| id.as_str()) {
-                                    if let Some(encoded_data) = request_json.get("data").and_then(|d| d.as_str()) {
-                                        match base64::decode(encoded_data) {
-                                            Ok(image_data) => {
-                                                if let Err(e) = p2p::store_received_image(image_id, &image_data).await {
-                                                    eprintln!("[P2P Listener] Failed to store image: {}", e);
-                                                }
-                                            }
-                                            Err(e) => eprintln!("[P2P Listener] Failed to decode image data: {}", e),
-                                        }
-                                    } else {
-                                        eprintln!("[P2P Listener] Missing or invalid 'data' field in response");
-                                    }
-                                } else {
-                                    eprintln!("[P2P Listener] Missing 'image_id' in response");
-                                }
-                            }
+                            // "image_response" => {
+                            //     if let Some(image_id) = request_json.get("image_id").and_then(|id| id.as_str()) {
+                            //         if let Some(encoded_data) = request_json.get("data").and_then(|d| d.as_str()) {
+                            //             match base64::decode(encoded_data) {
+                            //                 Ok(image_data) => {
+                            //                     if let Err(e) = p2p::store_received_image(image_id, &image_data).await {
+                            //                         eprintln!("[P2P Listener] Failed to store image: {}", e);
+                            //                     }
+                            //                 }
+                            //                 Err(e) => eprintln!("[P2P Listener] Failed to decode image data: {}", e),
+                            //             }
+                            //         } else {
+                            //             eprintln!("[P2P Listener] Missing or invalid 'data' field in response");
+                            //         }
+                            //     } else {
+                            //         eprintln!("[P2P Listener] Missing 'image_id' in response");
+                            //     }
+                            // }
                             _ => eprintln!("[P2P Listener] Unknown request type: {}", request_type),
                         }
                     } else {
@@ -252,7 +252,7 @@ async fn main() -> io::Result<()> {
                                 }
                             }
                             "3" => {
-                                workflow::request_image(&p2p_socket, &config, &peer_channel).await?;
+                                workflow::request_image(&socket, &config, &peer_channel).await?;
                             }
                             "4" => {
                                 workflow::increase_image_views(&p2p_socket, &config).await?;

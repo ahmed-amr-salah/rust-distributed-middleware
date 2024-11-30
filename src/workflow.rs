@@ -212,9 +212,11 @@ pub async fn request_image(
     let mut views_input = String::new(); // Another new `String` to handle this input
     io::stdin().read_line(&mut views_input)?;
     let views = views_input.trim().parse::<u16>().unwrap_or(0);
+    
+    let p2p_socket_response = Arc::new(UdpSocket::bind("0.0.0.0:0").await?);
 
     // Send P2P request
-    p2p::send_image_request(socket, peer_addr, &image_id, views).await?;
+    p2p::send_image_request(&p2p_socket_response, peer_addr, &image_id, views).await?;
 
     println!("Request sent to peer {} for image {}", peer_addr, image_id);
 
