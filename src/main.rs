@@ -26,7 +26,7 @@ mod encode; // Assuming this module includes encryption functions
 mod DOS;
 
 use server::{ServerStats, process_client_request, handle_heartbeat, handle_coordinator_notification};
-use DOS::{register_user, sign_in_user, get_images_up, shutdown_client};
+use DOS::{register_user, sign_in_user, get_images_up, shutdown_client, insert_into_resources};
 // Constants
 const SERVER_ID: u32 = 1;          // Modify this for each server instance
 const HEARTBEAT_PORT: u16 = 8085;   // Port for both sending and receiving heartbeat messages
@@ -38,10 +38,10 @@ const HEARTBEAT_PERIOD: u64 = 2;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Server settings
-    let local_addr: SocketAddr = "10.7.16.43:8081".parse().unwrap();
+    let local_addr: SocketAddr = "10.7.16.48:8081".parse().unwrap();
     let peer_addresses = vec![
-        "10.7.19.18:8085".parse().unwrap(),
-        "10.40.51.73:8085".parse().unwrap(),
+        //"10.7.19.18:8085".parse().unwrap(),
+        //"10.40.51.73:8085".parse().unwrap(),
     ];
 
     // Connect to the database
@@ -180,8 +180,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let combined_socket_str = format!("{}:{}", client_ip, p2p_port);
 
                     let response = sign_in_user(&mut dos_conn, &client_id, &combined_socket_str);
-                    println!("Response: {}", response);
-                    let response_bytes = serde_json::to_vec(&response).unwrap();
+                    // name json that has the images and the views the user receveid while he is offlice 
+                    let offline_requests = get_resources_by_client_id(&mut dos_conn, &client_id);
+
+                    // check if the user received any views requests while he was offline
+                    if response["status"] == "failure"{
+                        let response_bytes = serde_json::to_vec(&response).unwrap();
+                        println!("Response: {}", response);
+                    }
+                    else{
+                        let response_bytes = serde_json::to_vec(&offline_requests).unwrap();
+                        println!("Response: {}", offline_requests);
+                    }
+
                     if let Err(e) = async {
                         listen_socket_clone
                             .send_to(&response_bytes, client_addr)
@@ -252,9 +263,45 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
 
                 }
+                // 5. client wants to report that another peer went offline and did not receive the change view request
                 
-                // 5. Client requests for image encryption
+                else if json.contains("change-view") 
+                    {
+                        // Parse the incoming JSON
+                        let parsed_json: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+                        // Extract required fields from the JSON
+                        let viewer_id = parsed_json["viewer_id"].as_i64().unwrap_or(0) as u64;
+                        let image_id = parsed_json["image_id"].as_str().unwrap_or("");
+                        let views = parsed_json["views"].as_i64().unwrap_or(0) as i32;
+                        
+
+                        // Use the add_client_image_entry function to insert into the client_images table
+                        let add_entry_response = add_client_image_entry(&mut dos_conn, viewer_id, image_id, views);
+
+                        if add_entry_response["status"] == "failure" {
+                            println!("Failed to add client image entry: {}", add_entry_response["error"]);
+                        } else {
+                            println!("Successfully added client image entry.");
+                        }
+
+                        // Use the shutdown_client function to mark the client as offline
+                        let shutdown_response = shutdown_client(&mut dos_conn, viewer_id);
+
+                        if shutdown_response["status"] == "failure" {
+                            println!("Failed to mark client as offline: {}", shutdown_response["error"]);
+                        } else {
+                            println!("Successfully marked client as offline.");
+                        }
+                    }
+
+                // 6. Client requests for image encryption
                 else {
+                   
+                    let client_message: Vec<&str> = json.split(',').collect();
+                    let client_id:i32= client_message[0].parse::<i32>().unwrap();
+                    let image_id = client_message[1];
+                  
                     println!("Client encryption request received");
                     // Send the assigned client port back to the client
                     if let Err(e) = async {
@@ -273,6 +320,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if let Err(e) = communication::handle_client(client_socket_clone, client_addr).await {
                         eprintln!("Error handling client {}: {}", client_addr, e);
                     }
+
+                    // Adding the client resource to the dos
+                    let mut dos_conn = conn_clone.lock().await;
+                    let response = insert_into_resources(&mut dos_conn,client_id, &image_id);
                 }
 
                 

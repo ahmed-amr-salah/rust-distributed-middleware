@@ -149,3 +149,94 @@ pub fn shutdown_client(conn: &mut PooledConn, client_id: u64) -> serde_json::Val
         }
     }
 }
+
+pub fn add_client_image_entry(
+    conn: &mut PooledConn,
+    client_id: i32,
+    image_id: &str,
+    number_views: i32,
+) -> serde_json::Value {
+    if let Err(e) = conn.exec_drop(
+        "INSERT INTO client_images (client_id, image_id, number_views) VALUES (:client_id, :image_id, :number_views)",
+        params! {
+            "client_id" => client_id,
+            "image_id" => image_id,
+            "number_views" => number_views,
+        },
+    ) {
+        return json!({
+            "status": "failure",
+            "error": e.to_string()
+        });
+    }
+
+    json!({
+        "status": "success"
+    })
+}
+
+
+
+pub fn insert_into_resources(
+    conn: &mut PooledConn,
+    client_id: i32,
+    image_id: &str,
+) -> serde_json::Value {
+    // Step 1: Insert a new entry into the `resources` table
+    if let Err(e) = conn.exec_drop(
+        "INSERT INTO resources (client_ID, image_ID) VALUES (:client_id, :image_id)",
+        params! {
+            "client_id" => client_id,
+            "image_id" => image_id,
+        },
+    ) {
+        // If an error occurs during the insert, return a failure response with the error
+        return json!({
+            "status": "failure",
+            "error": e.to_string()
+        });
+    }
+
+    // If the insert is successful, return a success response
+    json!({
+        "status": "success",
+        "client_id": client_id,
+        "image_id": image_id
+    })
+}
+
+
+pub fn get_resources_by_client_id(conn: &mut PooledConn, client_id: i32) -> Value {
+    // Step 1: Prepare the SQL query to fetch the data
+    let query = "SELECT image_id, number_views FROM client_images WHERE client_id = :client_id";
+
+    // Step 2: Execute the query and collect the results
+    match conn.exec_iter(query, params! { "client_id" => client_id }) {
+        Ok(result) => {
+            let mut resources = Vec::new();
+
+            for row in result {
+                // Parse each row into a tuple of (image_id, number_views)
+                let (image_id, number_views): (String, i32) = mysql::from_row(row.unwrap());
+                resources.push(json!({
+                    "image_id": image_id,
+                    "number_views": number_views,
+                }));
+            }
+
+            // Return the results as JSON
+            json!({
+                "status": "success",
+                "client_id": client_id,
+                "resources": resources,
+            })
+        }
+        Err(e) => {
+            // Handle query execution errors
+            json!({
+                "status": "failure",
+                "error": e.to_string(),
+            })
+        }
+    }
+}
