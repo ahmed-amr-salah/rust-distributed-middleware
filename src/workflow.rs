@@ -9,7 +9,8 @@ use crate::communication;
 use crate::p2p;
 use crate::config::Config;
 use serde_json::json;
-use std::fs;
+use tokio::fs;
+use std::collections::HashMap;
 
 /// Determines which server will handle the request for a given resource ID.
 ///
@@ -119,7 +120,7 @@ pub async fn get_active_users(
     config: &Config,
 ) -> io::Result<Vec<(String, Vec<String>)>> {
     // Load user_id from the user.json file
-    let user_id = match fs::read_to_string("../user.json") {
+    let user_id = match fs::read_to_string("../user.json").await{
         Ok(contents) => {
             let json: serde_json::Value = serde_json::from_str(&contents).unwrap_or_default();
             json.get("user_id")
@@ -228,6 +229,16 @@ pub async fn request_image(
 
 
 pub async fn increase_image_views(socket: &Arc<UdpSocket>, config: &Config) -> io::Result<()> {
+    let dir = Path::new("../Peer_Images");
+    let json_file_path = dir.join("images_views.json");    
+    // Retrieve the peer images I currently have and their views
+    let image_views: HashMap<String, u32> = if fs::metadata(&json_file_path).await.is_ok() {
+        let json_content = fs::read_to_string(&json_file_path).await?;
+        serde_json::from_str(&json_content).unwrap_or_default()        
+    } else {
+        HashMap::new()
+    };
+
     // Retrieve active users from the server
     let active_users = get_active_users(socket, config).await?;
     println!("Active Users:");

@@ -15,6 +15,8 @@ use tokio::task;
 use crate::config::load_config;
 use tokio::time::{timeout, Duration};
 use std::io;
+use std::collections::HashMap;
+
 /// Sends an image request to another peer.
 ///
 /// # Arguments
@@ -40,7 +42,7 @@ pub async fn send_image_request(
 
     //LISTEN TO REQUESTED IMAGE
 
-    receive_encrypted_image(socket).await?;
+    receive_encrypted_image_from_client(socket).await?;
 
     Ok(())
 }
@@ -155,7 +157,7 @@ pub async fn send_image_payload_over_udp(
     Ok(())
 }
 
-pub async fn receive_encrypted_image(socket: &UdpSocket) -> io::Result<()> {
+pub async fn receive_encrypted_image_from_client(socket: &UdpSocket) -> io::Result<()> {
     let mut buffer = [0u8; 1024];
     let mut received_chunks = Vec::new();
 
@@ -296,15 +298,29 @@ pub async fn store_received_image(
     // Decode the access rights asynchronously
     let decoded_views = decode_access_rights(encoded_image).await?;
 
-    // Save metadata asynchronously
-    let metadata_path = dir.join(format!("{}_meta.json", image_id));
-    let metadata = json!({
-        "views": decoded_views
-    });
-    tokio::fs::write(metadata_path, metadata.to_string()).await?;
+    // Update the JSON file with the image_id and its views
+    let json_file_path = dir.join("images_views.json");
+    let mut image_views: HashMap<String, u32> = if fs::metadata(&json_file_path).await.is_ok() {
+        // File exists; read and parse it
+        let json_content = fs::read_to_string(&json_file_path).await?;
+        serde_json::from_str(&json_content).unwrap_or_default()
+    } else {
+        // File does not exist; start with an empty map
+        HashMap::new()
+    };
+
+    // Update or insert the image_id with the decoded views
+    image_views
+        .entry(image_id.to_string())
+        .and_modify(|views| *views += decoded_views as u32)
+        .or_insert(decoded_views as u32);
+
+    // Write the updated JSON back to the file
+    let updated_json = serde_json::to_string_pretty(&image_views)?;
+    fs::write(&json_file_path, updated_json).await?;
 
     println!(
-        "Stored image {} with {} views",
+        "Stored image {} with {} views (updated total in JSON).",
         image_id, decoded_views
     );
 

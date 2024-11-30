@@ -6,6 +6,7 @@ use tokio::sync::mpsc;
 use tokio::sync::Mutex;
 use serde_json::json;
 use uuid::Uuid;
+use std::fs;
 
 mod authentication;
 mod communication;
@@ -209,8 +210,35 @@ async fn main() -> io::Result<()> {
                                 }
 
                                 // Generate a random resource ID
-                                let resource_id = Uuid::new_v4().to_string();
-                                println!("Generated unique resource ID: {}", resource_id);
+                                // let resource_id = Uuid::new_v4().to_string();
+                                // println!("Generated unique resource ID: {}", resource_id);
+
+                                // Extract the image file name (without extension) as the resource ID
+                                let resource_name = image_path.file_stem()
+                                    .and_then(|os_str| os_str.to_str()) // Convert OsStr to str
+                                    .unwrap_or("unknown") // Fallback if file_stem is invalid
+                                    .to_string();
+
+
+                                let user_id: String = match fs::read_to_string("../user.json") {
+                                    Ok(contents) => {
+                                        let json: serde_json::Value = serde_json::from_str(&contents).unwrap_or_default();
+                                        json.get("user_id")
+                                            .and_then(|id| id.as_str()) // Convert to &str
+                                            .map(|id| id.to_string()) // Convert to String
+                                            .unwrap_or_else(|| "0".to_string()) // Fallback to "0" as a String
+                                    }
+                                    Err(_) => {
+                                        eprintln!("Failed to read user.json or user_id not found. Using default user_id = 0.");
+                                        "0".to_string() // Fallback to "0" as a String
+                                    }
+                                };
+                                    
+                                
+                                // Create the concatenated resource ID
+                                let resource_id = format!("client{}-{}", user_id, resource_name);
+
+                                println!("Concatenated Resource ID: {}", resource_id);
 
                                 // Find the server handling the request
                                 if let Some((server_addr, port)) = workflow::find_server_for_resource(
