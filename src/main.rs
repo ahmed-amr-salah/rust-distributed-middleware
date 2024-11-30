@@ -31,20 +31,75 @@ async fn main() -> io::Result<()> {
     println!("P2P Socket {}", p2p_socket.local_addr()?);
     println!("Socket {}", socket.local_addr()?);
 
-    let queue_clone = Arc::clone(&request_queue);
+    let request_queue_clone = Arc::clone(&request_queue);
     let p2p_socket_clone = Arc::clone(&p2p_socket);
-    tokio::spawn(async move {
-        let mut buffer = [0u8; 1024];
-        loop {
-            if let Ok((size, src)) = p2p_socket_clone.recv_from(&mut buffer).await {
-                let request = String::from_utf8_lossy(&buffer[..size]).to_string();
-                println!("[P2P Listener] Received request: {} from {}", request, src);
 
-                let mut queue = queue_clone.lock().await;
-                queue.push_back((src, request));
+    tokio::spawn({
+        async move {
+            let mut buffer = [0u8; 1024];
+            loop {
+                if let Ok((size, src)) = p2p_socket_clone.recv_from(&mut buffer).await {
+                    let received_data = String::from_utf8_lossy(&buffer[..size]).to_string();
+                    println!("[P2P Listener] Received data: {} from {}", received_data, src);
+
+                    if let Ok(response_json) = serde_json::from_str::<serde_json::Value>(&received_data) {
+                        if let Some(response_type) = response_json.get("type").and_then(|t| t.as_str()) {
+                            match response_type {
+                            // *** Automatically handle "increase_approved" ***
+                            "increase_approved" => {
+                                if let Some(image_id) = response_json.get("image_id").and_then(|id| id.as_str()) {
+                                    if let Some(additional_views) = response_json.get("views").and_then(|v| v.as_u64()) {
+                                        println!(
+                                            "[P2P Listener] Automatically handling 'increase_approved' for image '{}' with {} additional views.",
+                                            image_id, additional_views
+                                        );
+                                        p2p::handle_increase_views_response(image_id, additional_views as u32, true).await;
+                                    } else {
+                                        eprintln!("[P2P Listener] Missing or invalid 'views' in 'increase_approved' payload.");
+                                    }
+                                } else {
+                                    eprintln!("[P2P Listener] Missing 'image_id' in 'increase_approved' payload.");
+                                }
+                            }
+    
+                            // *** Automatically handle "increase_rejected" ***
+                            "increase_rejected" => {
+                                if let Some(image_id) = response_json.get("image_id").and_then(|id| id.as_str()) {
+                                    if let Some(additional_views) = response_json.get("views").and_then(|v| v.as_u64()) {
+                                        println!(
+                                            "[P2P Listener] Automatically handling 'increase_approved' for image '{}' with {} additional views.",
+                                            image_id, additional_views
+                                        );
+                                        p2p::handle_increase_views_response(image_id, additional_views as u32, false).await;
+                                    } else {
+                                        eprintln!("[P2P Listener] Missing or invalid 'views' in 'increase_approved' payload.");
+                                    }
+                                } else {
+                                    eprintln!("[P2P Listener] Missing 'image_id' in 'increase_approved' payload.");
+                                }
+                            }
+    
+                            // *** Add other payloads to the queue ***
+                            _ => {
+                                println!(
+                                    "[P2P Listener] Adding payload of type '{}' from {} to the queue.",
+                                    response_type, src
+                                );
+                                let mut queue = request_queue_clone.lock().await;
+                                queue.push_back((src, received_data)); // Add the payload to the queue
+                            }
+                        }
+                    } else {
+                        eprintln!("[P2P Listener] Malformed payload: Missing 'type' field.");
+                    }
+                } else {
+                    eprintln!("[P2P Listener] Failed to parse received data as JSON: {}", received_data);
+                }
             }
         }
-    });
+    }
+});
+    
     // Spawn P2P listener task
     // let p2p_socket_clone = Arc::clone(&p2p_socket);
     // tokio::spawn(async move {
