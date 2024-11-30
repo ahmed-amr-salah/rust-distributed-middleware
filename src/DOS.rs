@@ -150,14 +150,14 @@ pub fn shutdown_client(conn: &mut PooledConn, client_id: u64) -> serde_json::Val
     }
 }
 
-pub fn add_client_image_entry(
+pub fn update_access_rights(
     conn: &mut PooledConn,
-    client_id: i32,
+    client_id: u64,
     image_id: &str,
     number_views: i32,
 ) -> serde_json::Value {
     if let Err(e) = conn.exec_drop(
-        "INSERT INTO client_images (client_id, image_id, number_views) VALUES (:client_id, :image_id, :number_views)",
+        "INSERT INTO access_rights (client_id, image_id, number_views) VALUES (:client_id, :image_id, :number_views)",
         params! {
             "client_id" => client_id,
             "image_id" => image_id,
@@ -206,9 +206,9 @@ pub fn insert_into_resources(
 }
 
 
-pub fn get_resources_by_client_id(conn: &mut PooledConn, client_id: i32) -> Value {
+pub fn get_resources_by_client_id(conn: &mut PooledConn, client_id: u64) -> Value {
     // Step 1: Prepare the SQL query to fetch the data
-    let query = "SELECT image_id, number_views FROM client_images WHERE client_id = :client_id";
+    let query = "SELECT image_id, number_views FROM access_rights WHERE client_id = :client_id";
 
     // Step 2: Execute the query and collect the results
     match conn.exec_iter(query, params! { "client_id" => client_id }) {

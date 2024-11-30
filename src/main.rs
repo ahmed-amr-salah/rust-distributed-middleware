@@ -26,7 +26,7 @@ mod encode; // Assuming this module includes encryption functions
 mod DOS;
 
 use server::{ServerStats, process_client_request, handle_heartbeat, handle_coordinator_notification};
-use DOS::{register_user, sign_in_user, get_images_up, shutdown_client, insert_into_resources};
+use DOS::{register_user, sign_in_user, get_images_up, shutdown_client, insert_into_resources, update_access_rights, get_resources_by_client_id};
 // Constants
 const SERVER_ID: u32 = 1;          // Modify this for each server instance
 const HEARTBEAT_PORT: u16 = 8085;   // Port for both sending and receiving heartbeat messages
@@ -180,17 +180,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let combined_socket_str = format!("{}:{}", client_ip, p2p_port);
 
                     let response = sign_in_user(&mut dos_conn, &client_id, &combined_socket_str);
-                    // name json that has the images and the views the user receveid while he is offlice 
-                    let offline_requests = get_resources_by_client_id(&mut dos_conn, &client_id);
 
-                    // check if the user received any views requests while he was offline
-                    if response["status"] == "failure"{
-                        let response_bytes = serde_json::to_vec(&response).unwrap();
-                        println!("Response: {}", response);
-                    }
-                    else{
-                        let response_bytes = serde_json::to_vec(&offline_requests).unwrap();
-                        println!("Response: {}", offline_requests);
+                    // name json that has the images and the views the user receveid while he is offlice 
+                    let offline_requests = get_resources_by_client_id(&mut dos_conn, client_id);
+
+                    let mut response_bytes = serde_json::to_vec(&response).unwrap();
+                    if response["status"] == "success"{
+                        response_bytes = serde_json::to_vec(&offline_requests).unwrap();
                     }
 
                     if let Err(e) = async {
@@ -277,7 +273,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         
 
                         // Use the add_client_image_entry function to insert into the client_images table
-                        let add_entry_response = add_client_image_entry(&mut dos_conn, viewer_id, image_id, views);
+                        let mut dos_conn = conn_clone.lock().await;
+                        let add_entry_response = update_access_rights(&mut dos_conn, viewer_id, image_id, views);
 
                         if add_entry_response["status"] == "failure" {
                             println!("Failed to add client image entry: {}", add_entry_response["error"]);
