@@ -41,7 +41,15 @@ async fn main() -> io::Result<()> {
                 if let Ok((size, src)) = p2p_socket_clone.recv_from(&mut buffer).await {
                     let received_data = String::from_utf8_lossy(&buffer[..size]).to_string();
                     println!("[P2P Listener] Received data: {} from {}", received_data, src);
-
+                    // Parse the payload to JSON
+                    let response_json = match serde_json::from_str::<serde_json::Value>(&received_data) {
+                        Ok(json) => json,
+                        Err(_) => {
+                            // Log and ignore non-JSON payloads
+                            eprintln!("[P2P Listener] Ignoring non-JSON payload: {}", received_data);
+                            continue;
+                        }
+                    };
                     if let Ok(response_json) = serde_json::from_str::<serde_json::Value>(&received_data) {
                         if let Some(response_type) = response_json.get("type").and_then(|t| t.as_str()) {
                             match response_type {

@@ -194,15 +194,15 @@ pub async fn receive_encrypted_image_from_client(socket: &UdpSocket) -> io::Resu
                                 image_id, requested_views
                             );
                             // Prepare acknowledgment payload
-                            let acknowledgment = serde_json::json!({
+                            let rejection_ack = serde_json::json!({
                                 "type": "rejection_ack",
                                 "status": "received",
                                 "image_id": image_id
                             });
 
-                            let acknowledgment_string = acknowledgment.to_string(); // Store the string in a variable
-                            let acknowledgment_bytes = acknowledgment_string.as_bytes(); // Use the stored value here
-                            socket.send_to(acknowledgment_bytes, src_addr).await?;
+                            let rejection_ack_string = rejection_ack.to_string(); // Store the string in a variable
+                            let rejection_ack_bytes = rejection_ack_string.as_bytes(); // Use the stored value here
+                            socket.send_to(rejection_ack_bytes, src_addr).await?;
 
                             println!(
                                 "Acknowledgment sent for image_rejection with image_id: {} to {}",
