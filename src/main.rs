@@ -4,6 +4,7 @@ use tokio::time::{Duration, sleep};
 use std::collections::{HashMap, HashSet};
 use serde_cbor;
 use serde_json::json;
+use serde_json::Value;
 use std::io;
 use sysinfo::{System, SystemExt};
 use rand::Rng;
@@ -16,7 +17,7 @@ use std::time::SystemTime;
 use std::env;
 use dotenv::dotenv;
 use mysql::Pool;
-use crate::serde_cbor::Value;
+
 
 mod config;
 mod server;
@@ -37,7 +38,7 @@ const HEARTBEAT_PERIOD: u64 = 2;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Server settings
-    let local_addr: SocketAddr = "10.7.19.204:8081".parse().unwrap();
+    let local_addr: SocketAddr = "10.7.16.43:8081".parse().unwrap();
     let peer_addresses = vec![
         "10.7.19.18:8085".parse().unwrap(),
         "10.40.51.73:8085".parse().unwrap(),
@@ -161,11 +162,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     };
                     let client_id = json_response["user_id"].as_u64().unwrap();
+                    let p2p_socket = json_response["p2p_socket"].as_str().unwrap_or("").to_string();
 
                     let mut dos_conn = conn_clone.lock().await;
                     let client_addr_clone = client_addr.clone();
+                    let p2p_socket_clone = p2p_socket.clone();
 
-                    let response = sign_in_user(&mut dos_conn, &client_id, &client_addr_clone.to_string());
+                    // Split client_addr_clone into IP and port
+                    let client_ip = client_addr_clone.ip().to_string();
+                    
+
+                    // Split p2p_socket_clone into IP and port
+                    let p2p_socket_parts: Vec<&str> = p2p_socket_clone.split(':').collect();
+                    let p2p_port = p2p_socket_parts[1]; // Port from the p2p socket
+
+                    // Concatenate the client_ip with p2p_port to create the new socket address string
+                    let combined_socket_str = format!("{}:{}", client_ip, p2p_port);
+
+                    let response = sign_in_user(&mut dos_conn, &client_id, &combined_socket_str);
                     println!("Response: {}", response);
                     let response_bytes = serde_json::to_vec(&response).unwrap();
                     if let Err(e) = async {
