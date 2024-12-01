@@ -20,7 +20,7 @@ use serde_json::Value;
 use tokio::io::AsyncWriteExt;
 
 use crate::communication;
-
+use crate::decode;
 /// Sends an image request to another peer.
 ///
 /// # Arguments
@@ -51,8 +51,6 @@ pub async fn send_image_request(
     Ok(())
 }
 
-// Async encode function
-// Async encode function
 pub async fn encode_access_rights(
     img_id: &str,
     ip_address: &str,
@@ -72,36 +70,79 @@ pub async fn encode_access_rights(
     println!("IN ENCODE: num_views = {}", num_views);
 
     // Get the byte representation of `num_views`
-    let binary_data = num_views.to_be_bytes();
+    let num_views_bytes = num_views.to_be_bytes();
 
-    // Encode the byte data directly into the image
-    let encoder = Encoder::new(&binary_data, image);
-    let encoded_image = encoder.encode_alpha();
+    // Expand the image to add a new row
+    let mut rgba_image = image.to_rgba();
+    let (width, height) = rgba_image.dimensions();
 
-    Ok(DynamicImage::ImageRgba8(encoded_image))
+    // Create a new image buffer with one additional row
+    let mut new_image = image::ImageBuffer::new(width, height + 1);
+
+    // Copy the original image data
+    for y in 0..height {
+        for x in 0..width {
+            new_image.put_pixel(x, y, *rgba_image.get_pixel(x, y));
+        }
+    }
+
+    // Add the `num_views` data to the new row
+    for (x, byte) in num_views_bytes.iter().enumerate() {
+        if x as u32 >= width {
+            break; // Avoid exceeding image width
+        }
+        // Encode the byte as a pixel's alpha channel
+        new_image.put_pixel(
+            x as u32,
+            height,
+            image::Rgba([0, 0, 0, *byte]), // Encoding data in the alpha channel
+        );
+    }
+
+    // Convert the buffer back to a DynamicImage
+    let encoded_image = DynamicImage::ImageRgba8(new_image);
+
+    Ok(encoded_image)
 }
 
 
-pub async fn decode_access_rights(
+pub fn decode_access_rights(
     encoded_image: DynamicImage,
-) -> Result<u16, Box<dyn std::error::Error>> {
-    // Perform decoding in a blocking task
-    let decoded_data = tokio::task::spawn_blocking(move || {
-        let decoder = Decoder::new(encoded_image.to_rgba());
-        decoder.decode_alpha()
-    })
-    .await?;
+) -> Result<(u16, DynamicImage), Box<dyn std::error::Error>> {
+    // Convert the image to RGBA for processing
+    let mut rgba_image = encoded_image.to_rgba();
+    let (width, height) = rgba_image.dimensions();
 
-    // Ensure that we have at least 2 bytes of data
-    if decoded_data.len() < 2 {
-        return Err("Decoded data is too short".into());
+    if height < 1 {
+        return Err("Invalid image: no rows to decode".into());
     }
 
-    // Convert the first 2 bytes back into a `u16` value
-    let decoded_value = u16::from_be_bytes([decoded_data[0], decoded_data[1]]);
+    // Extract the last row, which contains the `num_views` data
+    let last_row_y = height - 1;
+    let mut num_views_bytes = [0u8; 2];
+    for x in 0..2 {
+        if x as u32 >= width {
+            break; // Avoid exceeding image width
+        }
+        let pixel = rgba_image.get_pixel(x as u32, last_row_y);
+        num_views_bytes[x] = pixel[3]; // Extract the alpha channel
+    }
 
-    println!("DECODED: num_views = {}", decoded_value);
-    Ok(decoded_value)
+    // Decode the `num_views` (u16) from the bytes
+    let num_views = u16::from_be_bytes(num_views_bytes);
+
+    // Remove the last row from the image
+    let mut original_image = image::ImageBuffer::new(width, height - 1);
+    for y in 0..(height - 1) {
+        for x in 0..width {
+            original_image.put_pixel(x, y, *rgba_image.get_pixel(x, y));
+        }
+    }
+
+    // Convert back to DynamicImage
+    let original_image = DynamicImage::ImageRgba8(original_image);
+
+    Ok((num_views, original_image))
 }
 
 
@@ -492,8 +533,41 @@ pub async fn store_received_image(
     })
     .await??;
 
-    // Decode the access rights asynchronously
-    let decoded_views = decode_access_rights(encoded_image).await?;
+    // Decode the access rights
+    let (decoded_views, first_layer_image) = match decode_access_rights(encoded_image) {
+        Ok(result) => result,
+        Err(e) => {
+            println!("Failed to decode access rights: {}", e);
+            return Err(e); // Propagate the error if needed
+        }
+    };
+
+    // Save the first-layer encoded image
+    let first_layer_file_path = dir.join(format!("{}_first_layer.png", image_id));
+    tokio::task::spawn_blocking({
+        let first_layer_file_path = first_layer_file_path.clone(); // Clone to avoid move issues
+        move || first_layer_image.save(&first_layer_file_path)
+    })
+    .await??;
+
+    // Decode the hidden image from the first-layer image
+    let hidden_file_path = dir.join(format!("{}_hidden.png", image_id));
+    tokio::task::spawn_blocking({
+        let first_layer_file_path = first_layer_file_path.clone(); // Clone to avoid move issues
+        let hidden_file_path = hidden_file_path.clone();           // Clone to avoid move issues
+        move || {
+            decode::decode_image(
+                first_layer_file_path.to_str().unwrap(),
+                hidden_file_path.to_str().unwrap(),
+            )
+        }
+    })
+    .await?;
+
+    println!(
+        "Hidden image successfully extracted and saved at: {}",
+        hidden_file_path.display()
+    );
 
     // Update the JSON file with the image_id and its views
     let json_file_path = dir.join("images_views.json");
@@ -523,6 +597,7 @@ pub async fn store_received_image(
 
     Ok(())
 }
+
 
 pub async fn handle_increase_views_response(image_id: &str, extra_views: u32, approved: bool) -> Result<(), Box<dyn std::error::Error>> {
     // Path to the JSON file storing the views
