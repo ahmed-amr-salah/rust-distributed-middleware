@@ -13,7 +13,7 @@ use image::ImageOutputFormat;
 use image::ImageFormat;
 use tokio::task;
 use crate::config::load_config;
-// use crate::decode::decode_image;
+use crate::decode::decode_image;
 use tokio::time::{timeout, Duration};
 use std::io;
 use std::collections::HashMap;
@@ -71,109 +71,81 @@ pub async fn encode_access_rights(
     println!("IN ENCODE: num_views = {}", num_views);
 
     // Get the byte representation of `num_views`
-    let binary_data = num_views.to_be_bytes();
+    let num_views_bytes = num_views.to_be_bytes();
 
-    // Encode the byte data directly into the image
-    let encoder = Encoder::new(&binary_data, image);
-    let encoded_image = encoder.encode_alpha();
+    // Expand the image to add a new row
+    let mut rgba_image = image.to_rgba();
+    let (width, height) = rgba_image.dimensions();
 
-    Ok(DynamicImage::ImageRgba8(encoded_image))
-}
+    // Create a new image buffer with one additional row
+    let mut new_image = image::ImageBuffer::new(width, height + 1);
 
-
-/// Remove the access rights encoding and return the intermediate image
-pub fn strip_access_rights(encoded_image: DynamicImage) -> Result<DynamicImage, Box<dyn std::error::Error>> {
-    // Convert to RGBA8 (4-channel format)
-    let mut rgba_image = encoded_image.to_rgba();
-
-    // Clear the first two bytes of the alpha channel where the access rights are stored
-    for (i, pixel) in rgba_image.pixels_mut().enumerate() {
-        if i < 2 {
-            // Reset the alpha value of the first two pixels
-            pixel[3] = 255; // Fully opaque (default alpha)
-        } else {
-            break;
+    // Copy the original image data
+    for y in 0..height {
+        for x in 0..width {
+            new_image.put_pixel(x, y, *rgba_image.get_pixel(x, y));
         }
     }
 
-    // Return the modified image as a `DynamicImage`
-    Ok(DynamicImage::ImageRgba8(rgba_image))
+    // Add the `num_views` data to the new row
+    for (x, byte) in num_views_bytes.iter().enumerate() {
+        if x as u32 >= width {
+            break; // Avoid exceeding image width
+        }
+        // Encode the byte as a pixel's alpha channel
+        new_image.put_pixel(
+            x as u32,
+            height,
+            image::Rgba([0, 0, 0, *byte]), // Encoding data in the alpha channel
+        );
+    }
+
+    // Convert the buffer back to a DynamicImage
+    let encoded_image = DynamicImage::ImageRgba8(new_image);
+
+    Ok(encoded_image)
 }
 
 
-pub async fn decode_access_rights(
+
+pub fn decode_access_rights(
     encoded_image: DynamicImage,
     image_id: &str,
-) -> Result<u16, Box<dyn std::error::Error>> {
+) -> Result<(u16, DynamicImage), Box<dyn std::error::Error>> {
+    // Convert the image to RGBA for processing
+    let mut rgba_image = encoded_image.to_rgba();
+    let (width, height) = rgba_image.dimensions();
 
-    let encoded_image_clone = encoded_image.clone();
-
-    // Step 1: Decode the access rights (upper layer of encoding)
-    let decoded_data = tokio::task::spawn_blocking(move || {
-        let decoder = Decoder::new(encoded_image_clone.to_rgba());
-        decoder.decode_alpha()
-    })
-    .await?;
-
-    // Ensure there are at least 2 bytes for decoding access rights
-    if decoded_data.len() < 2 {
-        return Err("Decoded data is too short".into());
+    if height < 1 {
+        return Err("Invalid image: no rows to decode".into());
     }
 
-    // Convert the first 2 bytes to a `u16` value representing the access rights
-    let decoded_value = u16::from_be_bytes([decoded_data[0], decoded_data[1]]);
-    println!("DECODED: num_views = {}", decoded_value);
-
-    // Step 2: Strip the access rights layer to get the intermediate image
-    let intermediate_image = strip_access_rights(encoded_image)?;
-
-    // Step 3: Save the intermediate image to a temp folder
-    let temp_directory = "../Peer_Images"; // Temporary folder for intermediate storage
-    let temp_image_path = format!("{}/{}_intermediate.png", temp_directory, image_id); // Temporary file path
-    encoded_image.save(&temp_image_path)?; // Save the intermediate image
-
-    // Step 4: Decode the lower layer (hidden image) using `decode_image`
-    let peer_images_directory = "../Peer_Images"; // Final output directory
-    let hidden_file_path = format!("{}/.{}.png", peer_images_directory, image_id); // Hidden raw image path
-
-    // Decode the hidden image and save it as a hidden file
-    // decode_image(&temp_image_path, &hidden_file_path);
-    println!("Starting the decoding process...");
-    
-    // Load the encoded cover image
-    let encoded_dynamic_img = open(temp_image_path)?;
-    println!("[Signature: Load Image] - Successfully loaded encoded image.");
-
-    // Convert DynamicImage to ImageBuffer for Decoder
-    let encoded_img = encoded_dynamic_img.to_rgba();
-    println!("[Signature: Convert Image] - Conversion successful.");
-
-    // Initialize decoder with the encoded image buffer
-    let decoder = Decoder::new(encoded_img);
-    println!("[Signature: Initialize Decoder] - Decoder initialized successfully.");
-    let hidden_img_bytes = decoder.decode_alpha();
-
-    // Convert the decoded bytes back into an image and save it
-    println!("Before loading from memory");
-    let hidden_img = match image::load_from_memory_with_format(&hidden_img_bytes, image::ImageFormat::PNG) {
-        Ok(img) => img,
-        Err(e) => {
-            println!("Failed to load hidden image: {:?}", e);
-            return Err(Box::new(e));
+    // Extract the last row, which contains the `num_views` data
+    let last_row_y = height - 1;
+    let mut num_views_bytes = [0u8; 2];
+    for x in 0..2 {
+        if x as u32 >= width {
+            break; // Avoid exceeding image width
         }
-    };    
-    println!("After loading from memory");
-    hidden_img.save(hidden_file_path.clone())?;
-    // println!("Image saved successfully in {}", hidden_file_path);
+        let pixel = rgba_image.get_pixel(x as u32, last_row_y);
+        num_views_bytes[x] = pixel[3]; // Extract the alpha channel
+    }
 
+    // Decode the `num_views` (u16) from the bytes
+    let num_views = u16::from_be_bytes(num_views_bytes);
 
+    // Remove the last row from the image
+    let mut original_image = image::ImageBuffer::new(width, height - 1);
+    for y in 0..(height - 1) {
+        for x in 0..width {
+            original_image.put_pixel(x, y, *rgba_image.get_pixel(x, y));
+        }
+    }
 
-    // Step 6: Clean up the temporary file
-    // std::fs::remove_file(&temp_image_path)?;
+    // Convert back to DynamicImage
+    let original_image = DynamicImage::ImageRgba8(original_image);
 
-    println!("Hidden raw image saved to: {}", hidden_file_path);
-
-    Ok(decoded_value)
+    Ok((num_views, original_image))
 }
 
 
@@ -210,21 +182,21 @@ pub async fn send_image_payload_over_udp(
             socket.send_to(&packet, (dest_ip, port)).await?;
             println!("Sent chunk {}/{}", i + 1, total_chunks);
 
-            let mut ack_buf = [0u8; 4];
-            match timeout(Duration::from_secs(2), socket.recv_from(&mut ack_buf)).await {
-                Ok(Ok((size, _))) if size == 4 => {
-                    let ack_id = u32::from_be_bytes(ack_buf);
-                    if ack_id == i as u32 {
-                        println!("Received acknowledgment for chunk {}", i + 1);
-                        break;
-                    } else {
-                        println!("Mismatched acknowledgment, retrying...");
-                    }
-                }
-                _ => {
-                    println!("No acknowledgment for chunk {}, retrying...", i + 1);
-                }
-            }
+            // let mut ack_buf = [0u8; 4];
+            // match timeout(Duration::from_secs(2), socket.recv_from(&mut ack_buf)).await {
+            //     Ok(Ok((size, _))) if size == 4 => {
+            //         let ack_id = u32::from_be_bytes(ack_buf);
+            //         if ack_id == i as u32 {
+            //             println!("Received acknowledgment for chunk {}", i + 1);
+            //             break;
+            //         } else {
+            //             println!("Mismatched acknowledgment, retrying...");
+            //         }
+            //     }
+            //     _ => {
+            //         println!("No acknowledgment for chunk {}, retrying...", i + 1);
+            //     }
+            // }
         }
     }
 
@@ -308,8 +280,8 @@ pub async fn receive_encrypted_image_from_client(socket: &UdpSocket) -> io::Resu
             received_chunks[chunk_id as usize] = data_chunk.to_vec();
 
             // Send acknowledgment for the received chunk
-            socket.send_to(&chunk_id.to_be_bytes(), src_addr).await?;
-            println!("Acknowledgment sent for chunk ID: {}", chunk_id);
+            // socket.send_to(&chunk_id.to_be_bytes(), src_addr).await?;
+            // println!("Acknowledgment sent for chunk ID: {}", chunk_id);
         } else {
             println!("Received malformed packet with size {}", size);
         }
@@ -355,20 +327,12 @@ pub async fn receive_encrypted_image_from_client(socket: &UdpSocket) -> io::Resu
 /// - `available_views`: The number of views available.
 /// - `peer_addr`: The address of the requesting peer.
 pub async fn respond_to_request(
-    _socket: &UdpSocket,
+    socket: &UdpSocket,
     image_id: &str,
     requested_views: u16,
     peer_addr: &str,
-    approved: bool,
+    approved: bool
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Create a new socket bound to an ephemeral port
-    let responder_socket = UdpSocket::bind("0.0.0.0:0").await?;
-    let responder_local_addr = responder_socket.local_addr()?;
-    println!(
-        "Responder bound to new socket at {}",
-        responder_local_addr
-    );
-
     if approved {
         let encoded_img = encode_access_rights(image_id, peer_addr, requested_views).await?;
         let buffer = tokio::task::spawn_blocking(move || {
@@ -382,9 +346,9 @@ pub async fn respond_to_request(
         let peer_ip = peer_addr.split(':').next().unwrap();
         let peer_port: u16 = peer_addr.split(':').nth(1).unwrap().parse()?;
 
-        println!("In respond_to_request: {}:{}", peer_ip, peer_port);
+        println!("In respond_to_request: {}:{}", peer_ip , peer_port);
 
-        send_image_payload_over_udp(&responder_socket, image_id, requested_views, buffer, peer_ip, peer_port)
+        send_image_payload_over_udp(socket, image_id, requested_views, buffer, peer_ip, peer_port)
             .await?;
         println!("Approved request for {} views", requested_views);
     } else {
@@ -394,60 +358,11 @@ pub async fn respond_to_request(
             "image_id": image_id
         });
 
-        responder_socket.send_to(response.to_string().as_bytes(), peer_addr).await?;
+        socket.send_to(response.to_string().as_bytes(), peer_addr).await?;
         println!("Rejected request for image {}", image_id);
-
-        // Wait for "rejection_ack" acknowledgment
-        let mut ack_buf = [0u8; 1024];
-        match timeout(Duration::from_secs(5), responder_socket.recv_from(&mut ack_buf)).await {
-            Ok(Ok((size, _))) => {
-                if let Ok(ack_json) = serde_json::from_slice::<serde_json::Value>(&ack_buf[..size]) {
-                    if ack_json.get("type") == Some(&serde_json::Value::String("rejection_ack".to_string()))
-                        && ack_json.get("image_id") == Some(&serde_json::Value::String(image_id.to_string()))
-                    {
-                        println!("Received 'rejection_ack' for image '{}'", image_id);
-                    } else {
-                        println!(
-                            "Received acknowledgment, but it is not a valid 'rejection_ack': {:?}",
-                            ack_json
-                        );
-                    }
-                } else {
-                    println!("Failed to parse acknowledgment as JSON.");
-                }
-            }
-            Ok(Err(e)) => {
-                eprintln!("Error receiving acknowledgment: {}", e);
-            }
-            Err(_) => {
-                println!("Timed out waiting for 'rejection_ack' acknowledgment.");
-            }
-        }
     }
-
     Ok(())
 }
-
-
-                                // // Multicast shutdown request
-                                // let shutdown_json = json!({
-                                //     "type": "shutdown",
-                                //     "user_id": user_id,
-                                //     "randam_number": random_num,
-                                // });
-
-                                // let (server_addr, shutdown_response) =
-                                //     communication::multicast_request_with_payload(
-                                //         &socket,
-                                //         shutdown_json.to_string(),
-                                //         &config.server_ips,
-                                //         config.request_port,
-                                //     )
-                                //     .await?;
-
-                                // println!("Sent shutdown request to {}", server_addr);
-                                // println!("Shutdown response: {}", shutdown_response);
-                                // break;
 
 
 pub async fn respond_to_increase_views(
@@ -457,90 +372,25 @@ pub async fn respond_to_increase_views(
     peer_addr: &str,
     approved: bool
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let response = if approved {
-        json!({
+
+    if approved {
+        let response = json!({
             "type": "increase_approved",
-            "views": requested_views,
+            "views" : requested_views,
             "image_id": image_id
-        })
-    } else {
-        json!({
-            "type": "increase_rejected",
-            "views": requested_views,
-            "image_id": image_id
-        })
-    };
-
-    socket.send_to(response.to_string().as_bytes(), peer_addr).await?;
-    println!(
-        "Sent response to {}: {}",
-        peer_addr,
-        if approved { "increase_approved" } else { "increase_rejected" }
-    );
-
-    // Wait for acknowledgment
-    let mut ack_buf = [0u8; 1024];
-    match timeout(Duration::from_secs(10), socket.recv_from(&mut ack_buf)).await {
-        Ok(Ok((size, src_addr))) => {
-            if let Ok(ack_json) = serde_json::from_slice::<serde_json::Value>(&ack_buf[..size]) {
-                let ack_type = if approved {
-                    "increase_approved_ack"
-                } else {
-                    "increase_rejected_ack"
-                };
-
-                if ack_json.get("type") == Some(&serde_json::Value::String(ack_type.to_string()))
-                    && ack_json.get("image_id") == Some(&serde_json::Value::String(image_id.to_string()))
-                {
-                    println!("Received '{}' acknowledgment from {}", ack_type, src_addr);
-                } else {
-                    println!(
-                        "Received acknowledgment, but it is not a valid '{}': {:?}",
-                        ack_type, ack_json
-                    );
-                }
-            } else {
-                println!("Failed to parse acknowledgment as JSON.");
-            }
-        }
-        Ok(Err(e)) => {
-            eprintln!("Error receiving acknowledgment: {}", e);
-        }
-        Err(_) => {
-            // if approved {
-
-            // }
-            // // Multicast shutdown request
-            // let update_view_response = json!({
-            //     "type": "change-view",
-            //     "image_id": image_id,
-            //     "requested_views": requested_views,
-            //     "peer_address": peer_addr
-            // });
-
-            // let (server_addr, shutdown_response) =
-            //     communication::multicast_request_with_payload(
-            //         &socket,
-            //         shutdown_json.to_string(),
-            //         &config.server_ips,
-            //         config.request_port,
-            //     )
-            //     .await?;
-
-            // println!("Sent shutdown request to {}", server_addr);
-            // println!("Shutdown response: {}", shutdown_response);
-            // break;
-            println!(
-                "Timed out waiting for '{}' acknowledgment for image '{}'.",
-                if approved { "increase_approved_ack" } else { "increase_rejected_ack" },
-                image_id
-            );
-        }
+        });
+        socket.send_to(response.to_string().as_bytes(), peer_addr).await?;
     }
-
+    else {
+        let response = json!({
+            "type": "increase_rejected",
+            "views" : requested_views,
+            "image_id": image_id
+        });
+        socket.send_to(response.to_string().as_bytes(), peer_addr).await?;
+    }
     Ok(())
 }
-
 
 /// Stores received images and metadata.
 ///
@@ -569,7 +419,7 @@ pub async fn store_received_image(
     .await??;
 
     // Decode the access rights asynchronously
-    let decoded_views = decode_access_rights(encoded_image, image_id).await?;
+    let decoded_views = decode_access_rights(encoded_image, image_id)?;
 
     // Update the JSON file with the image_id and its views
     let json_file_path = dir.join("images_views.json");
@@ -582,27 +432,26 @@ pub async fn store_received_image(
         HashMap::new()
     };
 
+    let views = decoded_views.0; 
     // Update or insert the image_id with the decoded views
     image_views
         .entry(image_id.to_string())
-        .and_modify(|views| *views += decoded_views as u32)
-        .or_insert(decoded_views as u32);
+        .and_modify(|views| *views += decoded_views.0 as u32)
+        .or_insert(views as u32);
 
     // Write the updated JSON back to the file
     let updated_json = serde_json::to_string_pretty(&image_views)?;
     fs::write(&json_file_path, updated_json).await?;
 
-    println!(
-        "Stored image {} with {} views (updated total in JSON).",
-        image_id, decoded_views
-    );
+    // println!("image_id: {}, decoded_views: {:?}", image_id, decoded_views);
+
 
     Ok(())
 }
 
 pub async fn handle_increase_views_response(image_id: &str, extra_views: u32, approved: bool) -> Result<(), Box<dyn std::error::Error>> {
     // Path to the JSON file storing the views
-    let json_file_path = Path::new("../Peer_Images/images_views.json");
+    let json_file_path = Path::new("image_views.json");
 
     // Check if the request is approved
     if approved {
