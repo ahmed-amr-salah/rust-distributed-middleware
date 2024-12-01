@@ -40,8 +40,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Server settings
     let local_addr: SocketAddr = "10.7.16.48:8081".parse().unwrap();
     let peer_addresses = vec![
-        "10.40.51.73:8085".parse().unwrap(),
-        //"10.7.19.18:8085".parse().unwrap(),
+        // "10.40.51.73:8085".parse().unwrap(),
+        // "10.7.19.18:8085".parse().unwrap(),
     ];
 
     // Connect to the database
@@ -109,8 +109,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             client_addr.port(),
             md5::compute(&buffer[..size]) // Ensure request ID is unique
         );
-        
-        // Parse the JSON and extract the "random_number" field
+
         let json = String::from_utf8_lossy(&buffer[..size]).to_string();
         if json.contains("randam_number"){
             let parsed_json: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -269,27 +268,86 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 // 5. client wants to report that another peer went offline and did not receive the change view request
                 
-                else if json.contains("change-view") 
-                    {
-                        // Parse the incoming JSON
-                        let parsed_json: serde_json::Value = serde_json::from_str(&json).unwrap();
+                // else if json.contains("change-view") 
+                //     {
+                //         // Parse the incoming JSON
+                //         let parsed_json: serde_json::Value = serde_json::from_str(&json).unwrap();
+                //         println!("Received change view request from client {}", String::from_utf8_lossy(&buffer[..size]));
 
-                        // Extract required fields from the JSON
-                        let viewer_id = parsed_json["viewer_id"].as_i64().unwrap_or(0) as u64;
-                        let image_id = parsed_json["image_id"].as_str().unwrap_or("");
-                        let views = parsed_json["views"].as_i64().unwrap_or(0) as i32;
+                //         // Extract required fields from the JSON
+                //         let viewer_IP = parsed_json["peer_address"].as_str().unwrap_or("");
+                //         let image_id = parsed_json["image_id"].as_str().unwrap_or("");
+                //         let views = parsed_json["requested_views"].as_i64().unwrap_or(0) as i32;
                         
+                //         println!("Viewer IP: {}", viewer_IP);
+                //         println!("Image ID: {}", image_id);
+                //         println!("Requested Views: {}", views);
 
-                        // Use the add_client_image_entry function to insert into the client_images table
-                        let mut dos_conn = conn_clone.lock().await;
-                        let add_entry_response = update_access_rights(&mut dos_conn, viewer_id, image_id, views);
+                //         // Use the add_client_image_entry function to insert into the client_images table
+                //         let mut dos_conn = conn_clone.lock().await;
+                //         let add_entry_response = update_access_rights(&mut dos_conn, viewer_IP, image_id, views);
 
-                        if add_entry_response["status"] == "failure" {
-                            println!("Failed to add client image entry: {}", add_entry_response["error"]);
-                        } else {
-                            println!("Successfully added client image entry.");
-                        }
+                //         if add_entry_response["status"] == "failure" {
+                //             println!("Failed to add client image entry: {}", add_entry_response["error"]);
+                //         } else {
+                //             println!("Successfully added client image entry.");
+                //         }
 
+                //         let viewer_id = add_entry_response["viewer_id"].as_u64().unwrap_or(0);
+
+                //         // Use the shutdown_client function to mark the client as offline
+                //         let shutdown_response = shutdown_client(&mut dos_conn, viewer_id);
+
+                //         if shutdown_response["status"] == "failure" {
+                //             println!("Failed to mark client as offline: {}", shutdown_response["error"]);
+                //         } else {
+                //             println!("Successfully marked client as offline.");
+                //         }
+                //     }
+
+                else if json.contains("change-view") 
+                {
+                    // Parse the incoming JSON
+                    let parsed_json: serde_json::Value = serde_json::from_str(&json).unwrap();
+                    println!("Received change view request from client {}", String::from_utf8_lossy(&buffer[..size]));
+
+                    // Extract required fields from the JSON
+                    let viewer_IP = parsed_json["peer_address"].as_str().unwrap_or("");
+                    let image_id = parsed_json["image_id"].as_str().unwrap_or("");
+                    let views = parsed_json["requested_views"].as_i64().unwrap_or(0) as i32;
+
+                    // Log missing fields
+                    if viewer_IP.is_empty() {
+                        println!("Warning: peer_address is missing in the request.");
+                    }
+                    if image_id.is_empty() {
+                        println!("Warning: image_id is missing in the request.");
+                    }
+                    if views == 0 {
+                        println!("Warning: requested_views is 0 or missing in the request.");
+                    }
+
+                    println!("Viewer IP: {}", viewer_IP);
+                    println!("Image ID: {}", image_id);
+                    println!("Requested Views: {}", views);
+
+                    // Use the add_client_image_entry function to insert into the client_images table
+                    let mut dos_conn = conn_clone.lock().await;
+                    let add_entry_response = update_access_rights(&mut dos_conn, viewer_IP, image_id, views);
+
+                    if add_entry_response["status"] == "failure" {
+                        println!("Failed to add client image entry: {}", add_entry_response["error"]);
+                    } else {
+                        println!("Successfully added client image entry.");
+                    }
+
+                    // Extract the viewer_id from add_entry_response
+                    let viewer_id = add_entry_response["viewer_id"].as_u64().unwrap_or(0);
+
+                    // Ensure viewer_id is valid before proceeding
+                    if viewer_id == 0 {
+                        println!("Invalid viewer ID: cannot mark client as offline.");
+                    } else {
                         // Use the shutdown_client function to mark the client as offline
                         let shutdown_response = shutdown_client(&mut dos_conn, viewer_id);
 
@@ -299,6 +357,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             println!("Successfully marked client as offline.");
                         }
                     }
+                }
+
 
                 // 6. Client requests for image encryption
                 else {

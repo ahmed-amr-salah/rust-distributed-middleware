@@ -152,10 +152,33 @@ pub fn shutdown_client(conn: &mut PooledConn, client_id: u64) -> serde_json::Val
 
 pub fn update_access_rights(
     conn: &mut PooledConn,
-    client_id: u64,
+    client_IP: &str,
     image_id: &str,
     number_views: i32,
 ) -> serde_json::Value {
+    // Step 1: Retrieve client_id based on client_IP
+    let client_id: Option<u64> = match conn.exec_first(
+        "SELECT ID FROM clients WHERE IP_port = :client_IP",
+        params! {
+            "client_IP" => client_IP,
+        },
+    ) {
+        Ok(Some(id)) => Some(id),
+        Ok(None) => None,
+        Err(e) => {
+            eprintln!("Failed to retrieve client ID: {}", e);
+            return json!({
+                "status": "failure",
+                "error": e.to_string()
+            });
+        }
+    };
+
+    // If client_id is not found (shouldn't happen due to early return above)
+    let client_id = client_id.unwrap_or(0);
+    println!("Client ID: {}", client_id);
+
+    // Step 2: Insert into access_rights table
     if let Err(e) = conn.exec_drop(
         "INSERT INTO access_rights (client_id, image_id, number_views) VALUES (:client_id, :image_id, :number_views)",
         params! {
@@ -170,10 +193,12 @@ pub fn update_access_rights(
         });
     }
 
+    // Return success
     json!({
         "status": "success"
     })
 }
+
 
 
 
