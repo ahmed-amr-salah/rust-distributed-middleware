@@ -19,6 +19,8 @@ use std::collections::HashMap;
 use serde_json::Value;
 use tokio::io::AsyncWriteExt;
 
+mod config;
+
 /// Sends an image request to another peer.
 ///
 /// # Arguments
@@ -392,6 +394,8 @@ pub async fn respond_to_increase_views(
         })
     };
 
+    println!("I WILL BE WAITING FOR ACK ON {}", socket.local_addr().unwrap());
+
     socket.send_to(response.to_string().as_bytes(), peer_addr).await?;
     println!(
         "Sent response to {}: {}",
@@ -428,34 +432,33 @@ pub async fn respond_to_increase_views(
             eprintln!("Error receiving acknowledgment: {}", e);
         }
         Err(_) => {
-            // if approved {
+            if approved {
+            // Multicast shutdown request
+            let update_view_response = json!({
+                "type": "change-view",
+                "image_id": image_id,
+                "requested_views": requested_views,
+                "peer_address": peer_addr
+            });
+            let config = config::load_config();
 
-            // }
-            // // Multicast shutdown request
-            // let update_view_response = json!({
-            //     "type": "change-view",
-            //     "image_id": image_id,
-            //     "requested_views": requested_views,
-            //     "peer_address": peer_addr
-            // });
+            let (server_addr, shutdown_response) =
+                communication::multicast_request_with_payload(
+                    &socket,
+                    update_view_response.to_string(),
+                    &config.server_ips,
+                    config.request_port,
+                )
+                .await?;
 
-            // let (server_addr, shutdown_response) =
-            //     communication::multicast_request_with_payload(
-            //         &socket,
-            //         shutdown_json.to_string(),
-            //         &config.server_ips,
-            //         config.request_port,
-            //     )
-            //     .await?;
-
-            // println!("Sent shutdown request to {}", server_addr);
-            // println!("Shutdown response: {}", shutdown_response);
-            // break;
-            println!(
-                "Timed out waiting for '{}' acknowledgment for image '{}'.",
-                if approved { "increase_approved_ack" } else { "increase_rejected_ack" },
-                image_id
-            );
+            println!("Sent change-view request to {}", server_addr);
+            println!("change-view response: {}", shutdown_response);
+        }
+            // println!(
+            //     "Timed out waiting for '{}' acknowledgment for image '{}'.",
+            //     if approved { "increase_approved_ack" } else { "increase_rejected_ack" },
+            //     image_id
+            // );
         }
     }
 

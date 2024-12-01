@@ -378,7 +378,7 @@ async fn main() -> io::Result<()> {
                                 }
                             }
                             "3" => {
-                                workflow::request_image(&p2p_socket, &config, &peer_channel).await?;
+                                workflow::request_image(&socket, &config, &peer_channel).await?;
                             }
                             "4" => {
                                 workflow::request_increase_image_views(&p2p_socket, &config).await?;
