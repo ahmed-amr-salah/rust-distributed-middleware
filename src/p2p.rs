@@ -304,7 +304,7 @@ pub async fn respond_to_request(
     image_id: &str,
     requested_views: u16,
     peer_addr: &str,
-    approved: bool
+    approved: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Create a new socket bound to an ephemeral port
     let responder_socket = UdpSocket::bind("0.0.0.0:0").await?;
@@ -313,6 +313,7 @@ pub async fn respond_to_request(
         "Responder bound to new socket at {}",
         responder_local_addr
     );
+
     if approved {
         let encoded_img = encode_access_rights(image_id, peer_addr, requested_views).await?;
         let buffer = tokio::task::spawn_blocking(move || {
@@ -326,7 +327,7 @@ pub async fn respond_to_request(
         let peer_ip = peer_addr.split(':').next().unwrap();
         let peer_port: u16 = peer_addr.split(':').nth(1).unwrap().parse()?;
 
-        println!("In respond_to_request: {}:{}", peer_ip , peer_port);
+        println!("In respond_to_request: {}:{}", peer_ip, peer_port);
 
         send_image_payload_over_udp(&responder_socket, image_id, requested_views, buffer, peer_ip, peer_port)
             .await?;
@@ -340,9 +341,38 @@ pub async fn respond_to_request(
 
         responder_socket.send_to(response.to_string().as_bytes(), peer_addr).await?;
         println!("Rejected request for image {}", image_id);
+
+        // Wait for "rejection_ack" acknowledgment
+        let mut ack_buf = [0u8; 1024];
+        match timeout(Duration::from_secs(5), responder_socket.recv_from(&mut ack_buf)).await {
+            Ok(Ok((size, _))) => {
+                if let Ok(ack_json) = serde_json::from_slice::<serde_json::Value>(&ack_buf[..size]) {
+                    if ack_json.get("type") == Some(&serde_json::Value::String("rejection_ack".to_string()))
+                        && ack_json.get("image_id") == Some(&serde_json::Value::String(image_id.to_string()))
+                    {
+                        println!("Received 'rejection_ack' for image '{}'", image_id);
+                    } else {
+                        println!(
+                            "Received acknowledgment, but it is not a valid 'rejection_ack': {:?}",
+                            ack_json
+                        );
+                    }
+                } else {
+                    println!("Failed to parse acknowledgment as JSON.");
+                }
+            }
+            Ok(Err(e)) => {
+                eprintln!("Error receiving acknowledgment: {}", e);
+            }
+            Err(_) => {
+                println!("Timed out waiting for 'rejection_ack' acknowledgment.");
+            }
+        }
     }
+
     Ok(())
 }
+
 
 
 pub async fn respond_to_increase_views(
