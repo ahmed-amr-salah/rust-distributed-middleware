@@ -56,14 +56,14 @@ pub async fn encode_access_rights(
     img_id: &str,
     ip_address: &str,
     num_views: u16,
-) -> Result<DynamicImage, Box<dyn Error>> {
+) -> Result<DynamicImage, Box<dyn std::error::Error>> {
     let config = load_config();
 
     let image_path = format!("{}/encrypted_{}.png", config.save_dir.display(), img_id);
 
     // Read and load the image file asynchronously
     let image_data = fs::read(&image_path).await?;
-    let image = task::spawn_blocking(move || {
+    let mut image = tokio::task::spawn_blocking(move || {
         image::load_from_memory_with_format(&image_data, ImageFormat::PNG) // Explicitly specify format
     })
     .await??;
@@ -73,12 +73,32 @@ pub async fn encode_access_rights(
     // Get the byte representation of `num_views`
     let binary_data = num_views.to_be_bytes();
 
-    // Encode the byte data directly into the image
-    let encoder = Encoder::new(&binary_data, image);
-    let encoded_image = encoder.encode_alpha();
+    // Reserve a specific region at the bottom-left corner
+    let mut image_rgba = image.to_rgba8();
+    let (width, height) = (image_rgba.width(), image_rgba.height());
 
-    Ok(DynamicImage::ImageRgba8(encoded_image))
+    // Ensure the image is large enough to encode the data
+    if binary_data.len() > 4 || height < 1 {
+        return Err("Image too small or data too large to encode.".into());
+    }
+
+    // Embed the access rights data in the bottom-left corner
+    for (i, &byte) in binary_data.iter().enumerate() {
+        let x = 0; // Always the left-most column
+        let y = height - 1 - i as u32; // Bottom-left, moving upwards for each byte
+        if y >= height {
+            return Err("Not enough space in the bottom-left region.".into());
+        }
+        let pixel = image_rgba.get_pixel_mut(x, y);
+        pixel[3] = byte; // Store in the alpha channel (or another channel if preferred)
+    }
+
+    // Convert back to DynamicImage
+    let encoded_image = DynamicImage::ImageRgba8(image_rgba);
+
+    Ok(encoded_image)
 }
+
 
 
 /// Remove the access rights encoding and return the intermediate image
@@ -101,81 +121,116 @@ pub fn strip_access_rights(encoded_image: DynamicImage) -> Result<DynamicImage, 
 }
 
 
+// pub async fn decode_access_rights(
+//     encoded_image: DynamicImage,
+//     image_id: &str,
+// ) -> Result<u16, Box<dyn std::error::Error>> {
+
+//     let encoded_image_clone = encoded_image.clone();
+
+//     // Step 1: Decode the access rights (upper layer of encoding)
+//     let decoded_data = tokio::task::spawn_blocking(move || {
+//         let decoder = Decoder::new(encoded_image_clone.to_rgba());
+//         decoder.decode_alpha()
+//     })
+//     .await?;
+
+//     // Ensure there are at least 2 bytes for decoding access rights
+//     if decoded_data.len() < 2 {
+//         return Err("Decoded data is too short".into());
+//     }
+
+//     // Convert the first 2 bytes to a `u16` value representing the access rights
+//     let decoded_value = u16::from_be_bytes([decoded_data[0], decoded_data[1]]);
+//     println!("DECODED: num_views = {}", decoded_value);
+
+//     // Step 2: Strip the access rights layer to get the intermediate image
+//     let intermediate_image = strip_access_rights(encoded_image)?;
+
+//     // Step 3: Save the intermediate image to a temp folder
+//     let temp_directory = "../Peer_Images"; // Temporary folder for intermediate storage
+//     let temp_image_path = format!("{}/{}_intermediate.png", temp_directory, image_id); // Temporary file path
+//     encoded_image.save(&temp_image_path)?; // Save the intermediate image
+
+//     // Step 4: Decode the lower layer (hidden image) using `decode_image`
+//     let peer_images_directory = "../Peer_Images"; // Final output directory
+//     let hidden_file_path = format!("{}/.{}.png", peer_images_directory, image_id); // Hidden raw image path
+
+//     // Decode the hidden image and save it as a hidden file
+//     // decode_image(&temp_image_path, &hidden_file_path);
+//     println!("Starting the decoding process...");
+    
+//     // Load the encoded cover image
+//     let encoded_dynamic_img = open(temp_image_path)?;
+//     println!("[Signature: Load Image] - Successfully loaded encoded image.");
+
+//     // Convert DynamicImage to ImageBuffer for Decoder
+//     let encoded_img = encoded_dynamic_img.to_rgba();
+//     println!("[Signature: Convert Image] - Conversion successful.");
+
+//     // Initialize decoder with the encoded image buffer
+//     let decoder = Decoder::new(encoded_img);
+//     println!("[Signature: Initialize Decoder] - Decoder initialized successfully.");
+//     let hidden_img_bytes = decoder.decode_alpha();
+
+//     // Convert the decoded bytes back into an image and save it
+//     println!("Before loading from memory");
+//     let hidden_img = match image::load_from_memory_with_format(&hidden_img_bytes, image::ImageFormat::PNG) {
+//         Ok(img) => img,
+//         Err(e) => {
+//             println!("Failed to load hidden image: {:?}", e);
+//             return Err(Box::new(e));
+//         }
+//     };    
+//     println!("After loading from memory");
+//     hidden_img.save(hidden_file_path.clone())?;
+//     // println!("Image saved successfully in {}", hidden_file_path);
+
+
+
+//     // Step 6: Clean up the temporary file
+//     // std::fs::remove_file(&temp_image_path)?;
+
+//     println!("Hidden raw image saved to: {}", hidden_file_path);
+
+//     Ok(decoded_value)
+// }
+
 pub async fn decode_access_rights(
     encoded_image: DynamicImage,
-    image_id: &str,
-) -> Result<u16, Box<dyn std::error::Error>> {
+) -> Result<(u16, DynamicImage), Box<dyn std::error::Error>> {
+    let mut image_rgba = encoded_image.to_rgba8();
+    let (width, height) = (image_rgba.width(), image_rgba.height());
 
-    let encoded_image_clone = encoded_image.clone();
-
-    // Step 1: Decode the access rights (upper layer of encoding)
-    let decoded_data = tokio::task::spawn_blocking(move || {
-        let decoder = Decoder::new(encoded_image_clone.to_rgba());
-        decoder.decode_alpha()
-    })
-    .await?;
-
-    // Ensure there are at least 2 bytes for decoding access rights
-    if decoded_data.len() < 2 {
-        return Err("Decoded data is too short".into());
+    // Ensure the image has enough height to decode the data
+    if height < 2 {
+        return Err("Image too small to decode access rights.".into());
     }
 
-    // Convert the first 2 bytes to a `u16` value representing the access rights
-    let decoded_value = u16::from_be_bytes([decoded_data[0], decoded_data[1]]);
+    // Read the access rights data from the bottom-left corner
+    let mut binary_data = [0u8; 2];
+    for (i, byte) in binary_data.iter_mut().enumerate() {
+        let x = 0; // Always the left-most column
+        let y = height - 1 - i as u32; // Bottom-left, moving upwards for each byte
+        if y >= height {
+            return Err("Not enough data in the bottom-left region.".into());
+        }
+        let pixel = image_rgba.get_pixel_mut(x, y);
+        *byte = pixel[3]; // Read from the alpha channel
+
+        // Remove the encoded access rights by resetting the alpha channel
+        pixel[3] = 255; // Set to fully opaque
+    }
+
+    // Convert back to u16
+    let decoded_value = u16::from_be_bytes(binary_data);
     println!("DECODED: num_views = {}", decoded_value);
 
-    // Step 2: Strip the access rights layer to get the intermediate image
-    let intermediate_image = strip_access_rights(encoded_image)?;
+    // Convert the modified RGBA image back to a DynamicImage
+    let modified_image = DynamicImage::ImageRgba8(image_rgba);
 
-    // Step 3: Save the intermediate image to a temp folder
-    let temp_directory = "../Peer_Images"; // Temporary folder for intermediate storage
-    let temp_image_path = format!("{}/{}_intermediate.png", temp_directory, image_id); // Temporary file path
-    encoded_image.save(&temp_image_path)?; // Save the intermediate image
-
-    // Step 4: Decode the lower layer (hidden image) using `decode_image`
-    let peer_images_directory = "../Peer_Images"; // Final output directory
-    let hidden_file_path = format!("{}/.{}.png", peer_images_directory, image_id); // Hidden raw image path
-
-    // Decode the hidden image and save it as a hidden file
-    // decode_image(&temp_image_path, &hidden_file_path);
-    println!("Starting the decoding process...");
-    
-    // Load the encoded cover image
-    let encoded_dynamic_img = open(temp_image_path)?;
-    println!("[Signature: Load Image] - Successfully loaded encoded image.");
-
-    // Convert DynamicImage to ImageBuffer for Decoder
-    let encoded_img = encoded_dynamic_img.to_rgba();
-    println!("[Signature: Convert Image] - Conversion successful.");
-
-    // Initialize decoder with the encoded image buffer
-    let decoder = Decoder::new(encoded_img);
-    println!("[Signature: Initialize Decoder] - Decoder initialized successfully.");
-    let hidden_img_bytes = decoder.decode_alpha();
-
-    // Convert the decoded bytes back into an image and save it
-    println!("Before loading from memory");
-    let hidden_img = match image::load_from_memory_with_format(&hidden_img_bytes, image::ImageFormat::PNG) {
-        Ok(img) => img,
-        Err(e) => {
-            println!("Failed to load hidden image: {:?}", e);
-            return Err(Box::new(e));
-        }
-    };    
-    println!("After loading from memory");
-    hidden_img.save(hidden_file_path.clone())?;
-    // println!("Image saved successfully in {}", hidden_file_path);
-
-
-
-    // Step 6: Clean up the temporary file
-    // std::fs::remove_file(&temp_image_path)?;
-
-    println!("Hidden raw image saved to: {}", hidden_file_path);
-
-    Ok(decoded_value)
+    Ok((decoded_value, modified_image))
 }
-
 
 
 
@@ -557,9 +612,9 @@ pub async fn store_received_image(
     // Create directory for storing images
     tokio::fs::create_dir_all(dir).await?;
 
-    // Save the encrypted image asynchronously
-    let file_path = dir.join(format!("{}_encrypted.png", image_id));
-    tokio::fs::write(&file_path, data).await?;
+    // Save the original encrypted image asynchronously
+    let encrypted_file_path = dir.join(format!("{}_encrypted.png", image_id));
+    tokio::fs::write(&encrypted_file_path, data).await?;
 
     // Clone data to pass it into the blocking task
     let data_owned = data.to_vec();
@@ -569,7 +624,22 @@ pub async fn store_received_image(
     .await??;
 
     // Decode the access rights asynchronously
-    let decoded_views = decode_access_rights(encoded_image, image_id).await?;
+    let (decoded_views, encoded_image_1) = decode_access_rights(encoded_image).await?;
+
+    // Save the modified image (encoded_image_1) to a separate file
+    let cleaned_image_path = dir.join(format!("{}_cleaned.png", image_id));
+    tokio::task::spawn_blocking(move || {
+        encoded_image_1.save_with_format(cleaned_image_path, ImageFormat::PNG)
+    })
+    .await??;
+
+    // Call the decode_image function to extract the original hidden image
+    let hidden_image_path = dir.join(format!("{}_original.png", image_id));
+    decode::decode_image(
+        encrypted_file_path.to_str().unwrap(),
+        hidden_image_path.to_str().unwrap(),
+    )?;
+    println!("Hidden image decoded and saved to {}", hidden_image_path.display());
 
     // Update the JSON file with the image_id and its views
     let json_file_path = dir.join("images_views.json");
