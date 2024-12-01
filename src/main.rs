@@ -231,6 +231,29 @@ async fn main() -> io::Result<()> {
                 if response_json.get("status") == Some(&serde_json::Value::String("success".to_string())) {
                     println!("Sign-in successful!");
 
+                    // Check if "resources" in the response is non-empty and update views
+                    if let Some(resources) = response_json.get("resources").and_then(|r| r.as_array()) {
+                        if resources.is_empty() {
+                            eprintln!("No resources available in response.");
+                        } else {
+                            for resource in resources {
+                                if let (Some(image_id), Some(views)) = (
+                                    resource.get("image_id").and_then(|id| id.as_str()),
+                                    resource.get("views").and_then(|v| v.as_u64()),
+                                ) {
+                                    println!("Updating views for image '{}': {} views", image_id, views);
+                                    if let Err(e) = p2p::handle_increase_views_response(image_id, views as u32, true).await {
+                                        eprintln!("Failed to update views for image '{}': {}", image_id, e);
+                                    }
+                                } else {
+                                    eprintln!("Malformed resource entry: {:?}", resource);
+                                }
+                            }
+                        }
+                    } else {
+                        eprintln!("Missing or invalid 'resources' field in response.");
+                    }
+
                     // Main menu after successful sign-in
                     let peer_channel = Arc::new(Mutex::new(p2p_rx));
                     loop {
