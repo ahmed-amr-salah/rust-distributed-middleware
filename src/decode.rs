@@ -20,7 +20,11 @@ pub fn decode_image(encoded_path: &str, output_hidden_path: &str) -> Result<(), 
     let hidden_img_bytes = decoder.decode_alpha();
 
     // Convert the decoded bytes back into an image and save it
+    println!("Before loading from memory");
     let hidden_img = image::load_from_memory(&hidden_img_bytes)?;
+    println!("After loading from memory");
     hidden_img.save(output_hidden_path)?;
+    println!("Image saved successfully in {}", output_hidden_path);
     Ok(())
 }
+

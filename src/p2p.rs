@@ -13,7 +13,7 @@ use image::ImageOutputFormat;
 use image::ImageFormat;
 use tokio::task;
 use crate::config::load_config;
-use crate::decode::decode_image;
+// use crate::decode::decode_image;
 use tokio::time::{timeout, Duration};
 use std::io;
 use std::collections::HashMap;
@@ -80,6 +80,7 @@ pub async fn encode_access_rights(
     Ok(DynamicImage::ImageRgba8(encoded_image))
 }
 
+
 /// Remove the access rights encoding and return the intermediate image
 pub fn strip_access_rights(encoded_image: DynamicImage) -> Result<DynamicImage, Box<dyn std::error::Error>> {
     // Convert to RGBA8 (4-channel format)
@@ -127,26 +128,48 @@ pub async fn decode_access_rights(
     let intermediate_image = strip_access_rights(encoded_image)?;
 
     // Step 3: Save the intermediate image to a temp folder
-    let temp_directory = "temp_images"; // Temporary folder for intermediate storage
-    std::fs::create_dir_all(temp_directory)?; // Ensure the directory exists
-
+    let temp_directory = "../Peer_Images"; // Temporary folder for intermediate storage
     let temp_image_path = format!("{}/{}_intermediate.png", temp_directory, image_id); // Temporary file path
-    intermediate_image.save(&temp_image_path)?; // Save the intermediate image
+    encoded_image.save(&temp_image_path)?; // Save the intermediate image
 
     // Step 4: Decode the lower layer (hidden image) using `decode_image`
     let peer_images_directory = "../Peer_Images"; // Final output directory
     let hidden_file_path = format!("{}/.{}.png", peer_images_directory, image_id); // Hidden raw image path
 
-    // Ensure the Peer_Images directory exists
-    std::fs::create_dir_all(peer_images_directory)?;
-
     // Decode the hidden image and save it as a hidden file
-    decode_image(&temp_image_path, &hidden_file_path);
+    // decode_image(&temp_image_path, &hidden_file_path);
+    println!("Starting the decoding process...");
+    
+    // Load the encoded cover image
+    let encoded_dynamic_img = open(temp_image_path)?;
+    println!("[Signature: Load Image] - Successfully loaded encoded image.");
+
+    // Convert DynamicImage to ImageBuffer for Decoder
+    let encoded_img = encoded_dynamic_img.to_rgba();
+    println!("[Signature: Convert Image] - Conversion successful.");
+
+    // Initialize decoder with the encoded image buffer
+    let decoder = Decoder::new(encoded_img);
+    println!("[Signature: Initialize Decoder] - Decoder initialized successfully.");
+    let hidden_img_bytes = decoder.decode_alpha();
+
+    // Convert the decoded bytes back into an image and save it
+    println!("Before loading from memory");
+    let hidden_img = match image::load_from_memory_with_format(&hidden_img_bytes, image::ImageFormat::PNG) {
+        Ok(img) => img,
+        Err(e) => {
+            println!("Failed to load hidden image: {:?}", e);
+            return Err(Box::new(e));
+        }
+    };    
+    println!("After loading from memory");
+    hidden_img.save(hidden_file_path.clone())?;
+    // println!("Image saved successfully in {}", hidden_file_path);
 
 
 
     // Step 6: Clean up the temporary file
-    std::fs::remove_file(&temp_image_path)?;
+    // std::fs::remove_file(&temp_image_path)?;
 
     println!("Hidden raw image saved to: {}", hidden_file_path);
 
