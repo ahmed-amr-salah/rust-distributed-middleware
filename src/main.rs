@@ -453,7 +453,7 @@ async fn main() -> io::Result<()> {
                                                                     if let Some(image_id) = request_json.get("image_id").and_then(|id| id.as_str()) {
                                                                         if let Some(requested_views) = request_json.get("views").and_then(|v| v.as_u64()) {
                                                                             let views = requested_views as u16;
-                                                                            println!("Processing 'image_request' for image_id: {}, views: {}", image_id, views);
+                                                                            println!("Processing 'increase_views_request' for image_id: {}, views: {}", image_id, views);
 
                                                                             // Call the appropriate function to handle the image request
                                                                             if let Err(e) = p2p::respond_to_increase_views(
@@ -467,13 +467,13 @@ async fn main() -> io::Result<()> {
                                                                             {
                                                                                 eprintln!("[Request Handler] Error responding to request: {}", e);
                                                                             } else {
-                                                                                println!("[Request Handler] Successfully handled 'image_request'.");
+                                                                                println!("[Request Handler] Successfully handled 'increase_views_request'.");
                                                                             }
                                                                         } else {
-                                                                            eprintln!("[Request Handler] Missing or invalid 'views' field in 'image_request'");
+                                                                            eprintln!("[Request Handler] Missing or invalid 'views' field in 'increase_views_request'");
                                                                         }
                                                                     } else {
-                                                                        eprintln!("[Request Handler] Missing 'image_id' field in 'image_request'");
+                                                                        eprintln!("[Request Handler] Missing 'image_id' field in 'increase_views_request'");
                                                                     }
                                                                 }
                                                                 // Add more request types as needed
@@ -523,11 +523,11 @@ async fn main() -> io::Result<()> {
                                                                         eprintln!("[Request Handler] Missing 'image_id' field in 'image_request'");
                                                                     }
                                                                 }
-                                                                "increase_views" => {
+                                                                "increase_views_request" => {
                                                                     if let Some(image_id) = request_json.get("image_id").and_then(|id| id.as_str()) {
                                                                         if let Some(requested_views) = request_json.get("views").and_then(|v| v.as_u64()) {
                                                                             let views = requested_views as u16;
-                                                                            println!("Processing 'image_request' for image_id: {}, views: {}", image_id, views);
+                                                                            println!("Processing 'increase_views_request' for image_id: {}, views: {}", image_id, views);
 
                                                                             // Call the appropriate function to handle the image request
                                                                             if let Err(e) = p2p::respond_to_increase_views(
@@ -541,13 +541,13 @@ async fn main() -> io::Result<()> {
                                                                             {
                                                                                 eprintln!("[Request Handler] Error responding to request: {}", e);
                                                                             } else {
-                                                                                println!("[Request Handler] Successfully handled 'image_request'.");
+                                                                                println!("[Request Handler] Successfully handled 'increase_views_request'.");
                                                                             }
                                                                         } else {
-                                                                            eprintln!("[Request Handler] Missing or invalid 'views' field in 'image_request'");
+                                                                            eprintln!("[Request Handler] Missing or invalid 'views' field in 'increase_views_request'");
                                                                         }
                                                                     } else {
-                                                                        eprintln!("[Request Handler] Missing 'image_id' field in 'image_request'");
+                                                                        eprintln!("[Request Handler] Missing 'image_id' field in 'increase_views_request'");
                                                                     }
                                                                 }
                                                                 // Add more request types as needed
