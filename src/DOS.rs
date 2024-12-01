@@ -179,10 +179,10 @@ pub fn update_access_rights(
 
 pub fn insert_into_resources(
     conn: &mut PooledConn,
-    client_id: i32,
+    client_id: u64,
     image_id: &str,
-) -> serde_json::Value {
-    // Step 1: Insert a new entry into the `resources` table
+) {
+    // Attempt to insert a new entry into the `resources` table
     if let Err(e) = conn.exec_drop(
         "INSERT INTO resources (client_ID, image_ID) VALUES (:client_id, :image_id)",
         params! {
@@ -190,20 +190,11 @@ pub fn insert_into_resources(
             "image_id" => image_id,
         },
     ) {
-        // If an error occurs during the insert, return a failure response with the error
-        return json!({
-            "status": "failure",
-            "error": e.to_string()
-        });
+        // Log the error or handle it as needed
+        eprintln!("Failed to insert into resources: {}", e);
     }
-
-    // If the insert is successful, return a success response
-    json!({
-        "status": "success",
-        "client_id": client_id,
-        "image_id": image_id
-    })
 }
+
 
 
 pub fn get_resources_by_client_id(conn: &mut PooledConn, client_id: u64) -> Value {

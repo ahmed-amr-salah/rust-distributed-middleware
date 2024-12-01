@@ -40,8 +40,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Server settings
     let local_addr: SocketAddr = "10.7.16.48:8081".parse().unwrap();
     let peer_addresses = vec![
+        "10.40.51.73:8085".parse().unwrap(),
         //"10.7.19.18:8085".parse().unwrap(),
-        //"10.40.51.73:8085".parse().unwrap(),
     ];
 
     // Connect to the database
@@ -103,12 +103,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         
         println!("Received request from client ---------------------> {}", client_addr);
         
-        let request_id = format!(
+        let mut request_id = format!(
             "{}-{}-{:x}", 
             client_addr.ip(),
             client_addr.port(),
             md5::compute(&buffer[..size]) // Ensure request ID is unique
         );
+        
+        // Parse the JSON and extract the "random_number" field
+        let json = String::from_utf8_lossy(&buffer[..size]).to_string();
+        if json.contains("randam_number"){
+            let parsed_json: serde_json::Value = serde_json::from_str(&json).unwrap();
+            let random_number = parsed_json["randam_number"].as_i64().unwrap();
+            request_id = format!("{}{}", request_id, random_number);
+            println!("Received random number: {}", random_number);
+            println!("Concatenated Result: {}", request_id);
+        }
+
         
         
         let stats_clone = Arc::clone(&stats);
@@ -123,9 +134,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             
             if is_coordinator {
                 println!("This server is elected as coordinator for request {}", request_id);
-                
-                // To determine the request type
-                let json = String::from_utf8_lossy(&buffer[..size]);
                 
                 // Types of Requests
                 // 1. Client Registration
@@ -296,7 +304,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 else {
                    
                     let client_message: Vec<&str> = json.split(',').collect();
-                    let client_id:i32= client_message[0].parse::<i32>().unwrap();
+                    let client_id:u64= client_message[0].parse::<u64>().unwrap();
                     let image_id = client_message[1];
                   
                     println!("Client encryption request received");
@@ -320,12 +328,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     // Adding the client resource to the dos
                     let mut dos_conn = conn_clone.lock().await;
-                    let response = insert_into_resources(&mut dos_conn,client_id, &image_id);
+                    insert_into_resources(&mut dos_conn, client_id, &image_id);
                 }
 
                 
-                // Free the port after transmission
-                drop(client_socket);
+    // No return, function just runs the insert
+    drop(client_socket);
                 
             } else {
                 println!("Another server will handle the re10.7.19.18-58052quest {}", request_id);
