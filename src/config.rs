@@ -21,6 +21,7 @@ pub fn load_config() -> Config {
     let server_ips = vec![
         env::var("FIRST_SERVER_IP").expect("FIRST_SERVER_IP is not set in .env"),
         env::var("SECOND_SERVER_IP").expect("SECOND_SERVER_IP is not set in .env"),
+        env::var("THIRD_SERVER_IP").expect("THIRD_SERVER_IP is not set in .env"),
     ];
 
     Config {

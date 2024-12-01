@@ -1,13 +1,21 @@
-use std::io::{self, Write};
+use std::io::{self, Write,Read};
 use std::path::Path;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
-use serde_json::json;
+use serde_json::{json, Value, Map};
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use std::fs;
+use std::fs::File;
 use std::collections::VecDeque;
+use rand::{Rng, SeedableRng};
+use rand::rngs::StdRng;
+use image::DynamicImage;
+use std::process::Command;
+mod open_image; // Add this at the top of main.rs
+use open_image::open_image_with_default_viewer;
 
 mod authentication;
 mod communication;
@@ -17,7 +25,10 @@ mod config;
 mod workflow;
 mod p2p;
 
+
+
 #[tokio::main]
+#[show_image::main]
 async fn main() -> io::Result<()> {
     // Load environment variables and configuration
     let config = config::load_config();
@@ -31,84 +42,107 @@ async fn main() -> io::Result<()> {
     println!("P2P Socket {}", p2p_socket.local_addr()?);
     println!("Socket {}", socket.local_addr()?);
 
-    let queue_clone = Arc::clone(&request_queue);
+    let request_queue_clone = Arc::clone(&request_queue);
     let p2p_socket_clone = Arc::clone(&p2p_socket);
-    tokio::spawn(async move {
-        let mut buffer = [0u8; 1024];
-        loop {
-            if let Ok((size, src)) = p2p_socket_clone.recv_from(&mut buffer).await {
-                let request = String::from_utf8_lossy(&buffer[..size]).to_string();
-                println!("[P2P Listener] Received request: {} from {}", request, src);
 
-                let mut queue = queue_clone.lock().await;
-                queue.push_back((src, request));
+    tokio::spawn({
+            async move {
+                let mut buffer = [0u8; 1024];
+                loop {
+                    if let Ok((size, src)) = p2p_socket_clone.recv_from(&mut buffer).await {
+                        let received_data = String::from_utf8_lossy(&buffer[..size]).to_string();
+                        println!("[P2P Listener] Received data: {} from {}", received_data, src);
+                        // Parse the payload to JSON
+                        let response_json = match serde_json::from_str::<serde_json::Value>(&received_data) {
+                            Ok(json) => json,
+                            Err(_) => {
+                                // Log and ignore non-JSON payloads
+                                eprintln!("[P2P Listener] Ignoring non-JSON payload: {}", received_data);
+                                continue;
+                            }
+                        };
+                        if let Ok(response_json) = serde_json::from_str::<serde_json::Value>(&received_data) {
+                            if let Some(response_type) = response_json.get("type").and_then(|t| t.as_str()) {
+                                match response_type {
+                                // *** Automatically handle "increase_approved" ***
+                                "increase_approved" => {
+                                    if let Some(image_id) = response_json.get("image_id").and_then(|id| id.as_str()) {
+                                        if let Some(additional_views) = response_json.get("views").and_then(|v| v.as_u64()) {
+                                            println!(
+                                                "[P2P Listener] Handling 'increase_approved' for image '{}' with {} additional views.",
+                                                image_id, additional_views
+                                            );
+                                            p2p::handle_increase_views_response(image_id, additional_views as u32, true).await;
+                                            
+                                            // Send acknowledgment
+                                            let ack_message = json!({
+                                                "type": "increase_approved_ack",
+                                                "status": "received",
+                                                "image_id": image_id
+                                            }).to_string();
+                                            if let Err(e) = p2p_socket_clone.send_to(ack_message.as_bytes(), src).await {
+                                                eprintln!("[P2P Listener] Failed to send acknowledgment: {}", e);
+                                            } else {
+                                                println!("[P2P Listener] Sent acknowledgment for 'increase_approved' to {}", src);
+                                            }
+                                        } else {
+                                            eprintln!("[P2P Listener] Missing or invalid 'views' in 'increase_approved' payload.");
+                                        }
+                                    } else {
+                                        eprintln!("[P2P Listener] Missing 'image_id' in 'increase_approved' payload.");
+                                    }
+                                }
+        
+                                // *** Automatically handle "increase_rejected" ***
+                                "increase_rejected" => {
+                                    if let Some(image_id) = response_json.get("image_id").and_then(|id| id.as_str()) {
+                                        if let Some(additional_views) = response_json.get("views").and_then(|v| v.as_u64()) {
+                                            println!(
+                                                "[P2P Listener] Handling 'increase_rejected' for image '{}' with {} additional views.",
+                                                image_id, additional_views
+                                            );
+                                            p2p::handle_increase_views_response(image_id, additional_views as u32, false).await;
+        
+                                            // Send acknowledgment
+                                            let ack_message = json!({
+                                                "type": "increase_rejected_ack",
+                                                "status": "received",
+                                                "image_id": image_id
+                                            }).to_string();
+                                            if let Err(e) = p2p_socket_clone.send_to(ack_message.as_bytes(), src).await {
+                                                eprintln!("[P2P Listener] Failed to send acknowledgment: {}", e);
+                                            } else {
+                                                println!("[P2P Listener] Sent acknowledgment for 'increase_rejected' to {}", src);
+                                            }
+                                        } else {
+                                            eprintln!("[P2P Listener] Missing or invalid 'views' in 'increase_rejected' payload.");
+                                        }
+                                    } else {
+                                        eprintln!("[P2P Listener] Missing 'image_id' in 'increase_rejected' payload.");
+                                    }
+                                }
+                                // *** Add other payloads to the queue ***
+                                _ => {
+                                    println!(
+                                        "[P2P Listener] Adding payload of type '{}' from {} to the queue.",
+                                        response_type, src
+                                    );
+                                    let mut queue = request_queue_clone.lock().await;
+                                    queue.push_back((src, received_data)); // Add the payload to the queue
+                                }
+                            }
+                        } else {
+                            eprintln!("[P2P Listener] Malformed payload: Missing 'type' field.");
+                        }
+                    } else {
+                        eprintln!("[P2P Listener] Failed to parse received data as JSON: {}", received_data);
+                    }
+                }
             }
         }
     });
-    // Spawn P2P listener task
-    // let p2p_socket_clone = Arc::clone(&p2p_socket);
-    // tokio::spawn(async move {
-    //     let mut buffer = [0u8; 1024];
-    //     loop {
-    //          println!("Hellooo");
-    //         if let Ok((size, src)) = p2p_socket_clone.recv_from(&mut buffer).await {
-    //             let request = String::from_utf8_lossy(&buffer[..size]).to_string();
-    //             println!("[P2P Listener] Received request: {} from {}", request, src);
-
-    //             if let Ok(request_json) = serde_json::from_str::<serde_json::Value>(&request) {
-    //                 if let Some(request_type) = request_json.get("type").and_then(|t| t.as_str()) {
-    //                     match request_type {
-    //                         "image_request" => {
-    //                             if let Some(image_id) = request_json.get("image_id").and_then(|id| id.as_str()) {
-    //                                 if let Some(requested_views) = request_json.get("views").and_then(|v| v.as_u64()) {
-    //                                     let views = requested_views as u16;
-    //                                     println!("received request for image from {}", src.to_string());
-    //                                     if let Err(e) = p2p::respond_to_request(
-    //                                         &p2p_socket_clone,
-    //                                         image_id,
-    //                                         views,
-    //                                         &src.to_string(),
-    //                                     )
-    //                                     .await
-    //                                     {
-    //                                         eprintln!("[P2P Listener] Error responding to request: {}", e);
-    //                                     }
-    //                                 } else {
-    //                                     eprintln!("[P2P Listener] Missing or invalid 'views' field in request");
-    //                                 }
-    //                             } else {
-    //                                 eprintln!("[P2P Listener] Missing 'image_id' in request");
-    //                             }
-    //                         }
-                            // "image_response" => {
-                            //     if let Some(image_id) = request_json.get("image_id").and_then(|id| id.as_str()) {
-                            //         if let Some(encoded_data) = request_json.get("data").and_then(|d| d.as_str()) {
-                            //             match base64::decode(encoded_data) {
-                            //                 Ok(image_data) => {
-                            //                     if let Err(e) = p2p::store_received_image(image_id, &image_data).await {
-                            //                         eprintln!("[P2P Listener] Failed to store image: {}", e);
-                            //                     }
-                            //                 }
-                            //                 Err(e) => eprintln!("[P2P Listener] Failed to decode image data: {}", e),
-                            //             }
-                            //         } else {
-                            //             eprintln!("[P2P Listener] Missing or invalid 'data' field in response");
-                            //         }
-                            //     } else {
-                            //         eprintln!("[P2P Listener] Missing 'image_id' in response");
-                            //     }
-                            // }
-    //                         _ => eprintln!("[P2P Listener] Unknown request type: {}", request_type),
-    //                     }
-    //                 } else {
-    //                     eprintln!("[P2P Listener] Malformed request: Missing 'type'");
-    //                 }
-    //             } else {
-    //                 eprintln!("[P2P Listener] Failed to parse request as JSON");
-    //             }
-    //         }
-    //     }
-    // });
+    
+    
 
     loop {
         // Authentication menu
@@ -124,9 +158,14 @@ async fn main() -> io::Result<()> {
 
         match choice {
             "1" => {
+                // Generate a random seed for the RNG
+                let seed: [u8; 32] = [0; 32];
+                let mut rng = StdRng::from_seed(seed);
+                let random_num: i32 = rng.gen();
                 // Create the registration JSON payload
                 let register_json = json!({
-                    "type": "register"
+                    "type": "register",
+                    "randam_number": random_num,
                 });
 
                 // Multicast registration request with the JSON payload
@@ -143,7 +182,7 @@ async fn main() -> io::Result<()> {
                 // Handle registration response
                 if let Some(user_id) = response_json.get("user_id").and_then(|id| id.as_u64()) {
                     let user_id_str = user_id.to_string(); // Convert u64 to String for saving
-                    authentication::save_user_id(&user_id_str, Path::new("user.json"))?;
+                    authentication::save_user_id(&user_id_str, Path::new("../user.json"))?;
                     println!("Registration successful! User ID: {}", user_id);
                 } else {
                     eprintln!("Error: Failed to retrieve user_id from server response.");
@@ -152,6 +191,11 @@ async fn main() -> io::Result<()> {
                 println!("Returning to the main menu...");
             }
             "2" => {
+                // Generate a random seed for the RNG
+                let seed: [u8; 32] = [0; 32];
+                let mut rng = StdRng::from_seed(seed);
+                let random_num: i32 = rng.gen();
+                // start the logic 
                 print!("Enter your user ID: ");
                 io::stdout().flush()?;
                 let mut user_id_input = String::new();
@@ -166,6 +210,17 @@ async fn main() -> io::Result<()> {
                         continue; // Return to the main menu
                     }
                 };
+
+                // Save the entered user_id to user.json
+                let user_id_str = user_id.to_string(); // Convert to string for saving
+                let user_data = json!({ "user_id": user_id_str });
+
+                if let Err(e) = std::fs::write("../user.json", user_data.to_string()) {
+                    eprintln!("Failed to overwrite user.json with new user ID: {}", e);
+                } else {
+                    println!("User ID saved successfully to user.json.");
+                }
+                
                 let local_addr = p2p_socket.local_addr()?;
                 // Format the address as ip_address:port
                 let p2p_formatted_socket = local_addr.to_string();
@@ -173,7 +228,8 @@ async fn main() -> io::Result<()> {
                 let auth_json = json!({
                     "type": "sign_in",
                     "user_id": user_id,
-                    "p2p_socket": p2p_formatted_socket
+                    "p2p_socket": p2p_formatted_socket,
+                    "randam_number": random_num,
                 });
 
                 // Multicast sign-in request
@@ -191,6 +247,29 @@ async fn main() -> io::Result<()> {
                 if response_json.get("status") == Some(&serde_json::Value::String("success".to_string())) {
                     println!("Sign-in successful!");
 
+                    // Check if "resources" in the response is non-empty and update views
+                    if let Some(resources) = response_json.get("resources").and_then(|r| r.as_array()) {
+                        if resources.is_empty() {
+                            eprintln!("No resources available in response.");
+                        } else {
+                            for resource in resources {
+                                if let (Some(image_id), Some(views)) = (
+                                    resource.get("image_id").and_then(|id| id.as_str()),
+                                    resource.get("views").and_then(|v| v.as_u64()),
+                                ) {
+                                    println!("Updating views for image '{}': {} views", image_id, views);
+                                    if let Err(e) = p2p::handle_increase_views_response(image_id, views as u32, true).await {
+                                        eprintln!("Failed to update views for image '{}': {}", image_id, e);
+                                    }
+                                } else {
+                                    eprintln!("Malformed resource entry: {:?}", resource);
+                                }
+                            }
+                        }
+                    } else {
+                        eprintln!("Missing or invalid 'resources' field in response.");
+                    }
+
                     // Main menu after successful sign-in
                     let peer_channel = Arc::new(Mutex::new(p2p_rx));
                     loop {
@@ -200,7 +279,8 @@ async fn main() -> io::Result<()> {
                         println!("3. Request Image From Active User");
                         println!("4. Increase Views of Image From Active User");
                         println!("5. View Client Requests");
-                        println!("6. Shutdown");
+                        println!("6. View Peer Images");
+                        println!("7. Shutdown");
                         print!("Enter your choice: ");
                         io::stdout().flush()?;
                         let mut menu_choice = String::new();
@@ -209,6 +289,11 @@ async fn main() -> io::Result<()> {
 
                         match menu_choice {
                             "1" => {
+                                // generate random seed for the RNG
+                                let seed: [u8; 32] = [0; 32];
+                                let mut rng = StdRng::from_seed(seed);
+                                let mut random_num: i32 = rng.gen();
+
                                 // User input: image path and resource ID
                                 let mut input = String::new();
                                 print!("Enter the path to the image: ");
@@ -255,7 +340,8 @@ async fn main() -> io::Result<()> {
                                 // Create the concatenated resource ID
                                 let resource_id = format!("client{}-{}", user_id, resource_name);
                                 // create json as string that has used_id and resource_id
-                                let welcome_message = format!("{},{}", user_id, resource_id);
+                                //craft welcome message to to has the  user_id, resource_id and counter
+                                let welcome_message = format!("{},{},{}", user_id, resource_id,random_num); 
 
                                 println!("Concatenated Resource ID: {}", resource_id);
 
@@ -376,7 +462,7 @@ async fn main() -> io::Result<()> {
                                                                     if let Some(image_id) = request_json.get("image_id").and_then(|id| id.as_str()) {
                                                                         if let Some(requested_views) = request_json.get("views").and_then(|v| v.as_u64()) {
                                                                             let views = requested_views as u16;
-                                                                            println!("Processing 'image_request' for image_id: {}, views: {}", image_id, views);
+                                                                            println!("Processing 'increase_views_request' for image_id: {}, views: {}", image_id, views);
 
                                                                             // Call the appropriate function to handle the image request
                                                                             if let Err(e) = p2p::respond_to_increase_views(
@@ -390,13 +476,13 @@ async fn main() -> io::Result<()> {
                                                                             {
                                                                                 eprintln!("[Request Handler] Error responding to request: {}", e);
                                                                             } else {
-                                                                                println!("[Request Handler] Successfully handled 'image_request'.");
+                                                                                println!("[Request Handler] Successfully handled 'increase_views_request'.");
                                                                             }
                                                                         } else {
-                                                                            eprintln!("[Request Handler] Missing or invalid 'views' field in 'image_request'");
+                                                                            eprintln!("[Request Handler] Missing or invalid 'views' field in 'increase_views_request'");
                                                                         }
                                                                     } else {
-                                                                        eprintln!("[Request Handler] Missing 'image_id' field in 'image_request'");
+                                                                        eprintln!("[Request Handler] Missing 'image_id' field in 'increase_views_request'");
                                                                     }
                                                                 }
                                                                 // Add more request types as needed
@@ -446,11 +532,11 @@ async fn main() -> io::Result<()> {
                                                                         eprintln!("[Request Handler] Missing 'image_id' field in 'image_request'");
                                                                     }
                                                                 }
-                                                                "increase_views" => {
+                                                                "increase_views_request" => {
                                                                     if let Some(image_id) = request_json.get("image_id").and_then(|id| id.as_str()) {
                                                                         if let Some(requested_views) = request_json.get("views").and_then(|v| v.as_u64()) {
                                                                             let views = requested_views as u16;
-                                                                            println!("Processing 'image_request' for image_id: {}, views: {}", image_id, views);
+                                                                            println!("Processing 'increase_views_request' for image_id: {}, views: {}", image_id, views);
 
                                                                             // Call the appropriate function to handle the image request
                                                                             if let Err(e) = p2p::respond_to_increase_views(
@@ -464,13 +550,13 @@ async fn main() -> io::Result<()> {
                                                                             {
                                                                                 eprintln!("[Request Handler] Error responding to request: {}", e);
                                                                             } else {
-                                                                                println!("[Request Handler] Successfully handled 'image_request'.");
+                                                                                println!("[Request Handler] Successfully handled 'increase_views_request'.");
                                                                             }
                                                                         } else {
-                                                                            eprintln!("[Request Handler] Missing or invalid 'views' field in 'image_request'");
+                                                                            eprintln!("[Request Handler] Missing or invalid 'views' field in 'increase_views_request'");
                                                                         }
                                                                     } else {
-                                                                        eprintln!("[Request Handler] Missing 'image_id' field in 'image_request'");
+                                                                        eprintln!("[Request Handler] Missing 'image_id' field in 'increase_views_request'");
                                                                     }
                                                                 }
                                                                 // Add more request types as needed
@@ -498,11 +584,115 @@ async fn main() -> io::Result<()> {
                                     }
                                 }
                             } 
+                            
                             "6" => {
+                                // Generate a random seed for the RNG
+                                let seed: [u8; 32] = [0; 32];
+                                let mut rng = StdRng::from_seed(seed);
+                                let random_num: i32 = rng.gen();
+                                 
+                                //Viewing Images we have access to
+                                //PseudoCode
+                                // retrieve images_views.json file and display to user and wait for 
+                                // user to choose image_id
+                                //retrive {image_id}.png from received_images and show it in a pop up widow
+                                //decrement the value corresponding to the image_id to image_views.json
+                                //if the value is zero we will delete {image_id}.png
+                                //and delete the entry for this image id in image_views.json
+                                //and print that we ran out of viewing rights
+                                
+                                let json_image_views_path = "../Peer_Images/images_views.json";
+                                let images_folder = "../Peer_Images";
+                                
+                                let mut file = File::open(json_image_views_path).expect("Failed to open images_views.json");
+                                let mut contents = String::new();
+                                file.read_to_string(&mut contents).expect("Failed to read images_views.json");
+
+                                // Parse JSON
+                                let mut image_views: Map<String, Value> = serde_json::from_str(&contents)
+                                    .expect("Invalid JSON format in images_views.json");
+
+                                // Step 2: Display available image IDs and view counts
+                                println!("Available Images:");
+                                for (image_id, count) in &image_views{
+                                    println!("{} -> Remaining Views: {}", image_id, count.as_u64().unwrap_or(0));
+                                }
+
+                                // Step 3: Prompt the user to select an image ID
+                                println!("Enter the Image ID you want to view:");
+                                let mut selected_image_id = String::new();
+                                io::stdin().read_line(&mut selected_image_id).expect("Failed to read input");
+                                let selected_image_id = selected_image_id.trim();
+
+                                // Step 4: Validate the selection
+                                if let Some(remaining_views) = image_views.get_mut(selected_image_id) {
+                                    let remaining_views = remaining_views.as_u64().expect("Invalid view count");
+                                    
+                                        // Step 5: Construct the path to the image
+                                        let image_path = format!("{}/.{}.png", images_folder, selected_image_id);
+                                    if remaining_views > 0 {
+                                        // Check if the image exists
+                                        if !Path::new(&image_path).exists() {
+                                            println!("Image file not found: {}", image_path);
+                                            return Ok(());
+                                        }
+
+                                        // Step 6: Open the image using the system's default viewer
+                                        println!("Image Path is {}", image_path);
+                                        if let Err(e) = open_image_with_default_viewer(&image_path).await {
+                                            eprintln!("Error: {}", e);
+                                        }
+                                        // Step 7: Decrement the view count
+                                    
+                                        *image_views.get_mut(selected_image_id).unwrap() = Value::from(remaining_views - 1);
+                                        println!(
+                                            "Remaining views for image {}: {}",
+                                            selected_image_id,
+                                            remaining_views - 1
+                                        );
+                                    } else {
+                                        println!("Ran out of viewing rights");
+
+                                        // Construct the path to the encrypted image
+                                        let encrypted_image_path = format!("{}/{}_encrypted.png", images_folder, selected_image_id);
+
+                                        // Check if the encrypted image exists
+                                        if !Path::new(&encrypted_image_path).exists() {
+                                            println!("Encrypted image file not found: {}", encrypted_image_path);
+                                            return Ok(());
+                                        }
+
+                                        // Open the encrypted image using the system's default viewer
+                                        println!("Displaying encrypted image: {}", encrypted_image_path);
+                                        if let Err(e) = open_image_with_default_viewer(&encrypted_image_path).await {
+                                            eprintln!("Error: {}", e);
+                                        }
+
+                                    }
+
+                                    // Step 8: Save the updated JSON
+                                    let mut file = File::create(json_image_views_path).expect("Failed to create images_views.json");
+                                    let updated_json = serde_json::to_string_pretty(&Value::Object(image_views))
+                                        .expect("Failed to serialize updated JSON");
+                                    file.write_all(updated_json.as_bytes())
+                                        .expect("Failed to write to images_views.json");
+
+                                } else {
+                                    println!("Invalid Image ID: {}", selected_image_id);
+                                }
+
+
+
+                                
+                                
+                            }
+                            
+                            "7" => {
                                 // Multicast shutdown request
                                 let shutdown_json = json!({
                                     "type": "shutdown",
-                                    "user_id": user_id
+                                    "user_id": user_id,
+                                    "randam_number": random_num,
                                 });
 
                                 let (server_addr, shutdown_response) =

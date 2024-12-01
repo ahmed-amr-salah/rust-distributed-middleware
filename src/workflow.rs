@@ -12,6 +12,11 @@ use serde_json::json;
 use tokio::fs;
 use std::collections::HashMap;
 
+use rand::{Rng, SeedableRng};
+use rand::rngs::StdRng;
+
+
+
 /// Determines which server will handle the request for a given resource ID.
 ///
 /// # Arguments
@@ -39,7 +44,7 @@ pub async fn find_server_for_resource(
 
     // Wait for a response
     for _ in 0..server_ips.len() {
-        match timeout(Duration::from_secs(5), socket.recv_from(&mut buffer)).await {
+        match timeout(Duration::from_secs(7), socket.recv_from(&mut buffer)).await {
             Ok(Ok((size, src))) if size == 2 => {
                 let port = u16::from_be_bytes([buffer[0], buffer[1]]);
                 return Ok(Some((src.ip().to_string(), port)));
@@ -119,6 +124,11 @@ pub async fn get_active_users(
     socket: &Arc<UdpSocket>,
     config: &Config,
 ) -> io::Result<Vec<(String, Vec<String>)>> {
+    // generate random number
+    let seed: [u8; 32] = [0; 32];
+    let mut rng = StdRng::from_seed(seed);
+    let mut random_num: i32 = rng.gen();
+
     // Load user_id from the user.json file
     let user_id = match fs::read_to_string("../user.json").await{
         Ok(contents) => {
@@ -137,7 +147,8 @@ pub async fn get_active_users(
     // Create the request payload for active users with user_id
     let active_users_request = json!({
         "type": "active_users",
-        "user_id": user_id
+        "user_id": user_id,
+        "random_num": random_num
     });
 
     // Send the multicast request and await the response
