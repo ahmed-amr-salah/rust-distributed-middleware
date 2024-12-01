@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use serde_json::Value;
 use tokio::io::AsyncWriteExt;
 
-mod config;
+use crate::communication;
 
 /// Sends an image request to another peer.
 ///
@@ -440,7 +440,7 @@ pub async fn respond_to_increase_views(
                 "requested_views": requested_views,
                 "peer_address": peer_addr
             });
-            let config = config::load_config();
+            let config = load_config();
 
             let (server_addr, shutdown_response) =
                 communication::multicast_request_with_payload(
