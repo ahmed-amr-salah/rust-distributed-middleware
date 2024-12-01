@@ -401,7 +401,7 @@ pub async fn respond_to_increase_views(
 
     // Wait for acknowledgment
     let mut ack_buf = [0u8; 1024];
-    match timeout(Duration::from_secs(5), socket.recv_from(&mut ack_buf)).await {
+    match timeout(Duration::from_secs(10), socket.recv_from(&mut ack_buf)).await {
         Ok(Ok((size, src_addr))) => {
             if let Ok(ack_json) = serde_json::from_slice::<serde_json::Value>(&ack_buf[..size]) {
                 let ack_type = if approved {
