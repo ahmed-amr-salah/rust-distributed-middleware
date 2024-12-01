@@ -8,6 +8,8 @@ use serde_json::json;
 use uuid::Uuid;
 use std::fs;
 use std::collections::VecDeque;
+use rand::{Rng, SeedableRng};
+use rand::rngs::StdRng;
 
 mod authentication;
 mod communication;
@@ -16,6 +18,8 @@ mod encode;
 mod config;
 mod workflow;
 mod p2p;
+
+
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
@@ -35,157 +39,94 @@ async fn main() -> io::Result<()> {
     let p2p_socket_clone = Arc::clone(&p2p_socket);
 
     tokio::spawn({
-        async move {
-            let mut buffer = [0u8; 1024];
-            loop {
-                if let Ok((size, src)) = p2p_socket_clone.recv_from(&mut buffer).await {
-                    let received_data = String::from_utf8_lossy(&buffer[..size]).to_string();
-                    println!("[P2P Listener] Received data: {} from {}", received_data, src);
-                    // Parse the payload to JSON
-                    let response_json = match serde_json::from_str::<serde_json::Value>(&received_data) {
-                        Ok(json) => json,
-                        Err(_) => {
-                            // Log and ignore non-JSON payloads
-                            eprintln!("[P2P Listener] Ignoring non-JSON payload: {}", received_data);
-                            continue;
-                        }
-                    };
-                    if let Ok(response_json) = serde_json::from_str::<serde_json::Value>(&received_data) {
-                        if let Some(response_type) = response_json.get("type").and_then(|t| t.as_str()) {
-                            match response_type {
-                            // *** Automatically handle "increase_approved" ***
-                            "increase_approved" => {
-                                if let Some(image_id) = response_json.get("image_id").and_then(|id| id.as_str()) {
-                                    if let Some(additional_views) = response_json.get("views").and_then(|v| v.as_u64()) {
-                                        println!(
-                                            "[P2P Listener] Automatically handling 'increase_approved' for image '{}' with {} additional views.",
-                                            image_id, additional_views
-                                        );
-                                        p2p::handle_increase_views_response(image_id, additional_views as u32, true).await;
+            async move {
+                let mut buffer = [0u8; 1024];
+                loop {
+                    if let Ok((size, src)) = p2p_socket_clone.recv_from(&mut buffer).await {
+                        let received_data = String::from_utf8_lossy(&buffer[..size]).to_string();
+                        println!("[P2P Listener] Received data: {} from {}", received_data, src);
+                        // Parse the payload to JSON
+                        let response_json = match serde_json::from_str::<serde_json::Value>(&received_data) {
+                            Ok(json) => json,
+                            Err(_) => {
+                                // Log and ignore non-JSON payloads
+                                eprintln!("[P2P Listener] Ignoring non-JSON payload: {}", received_data);
+                                continue;
+                            }
+                        };
+                        if let Ok(response_json) = serde_json::from_str::<serde_json::Value>(&received_data) {
+                            if let Some(response_type) = response_json.get("type").and_then(|t| t.as_str()) {
+                                match response_type {
+                                // *** Automatically handle "increase_approved" ***
+                                "increase_approved" => {
+                                    if let Some(image_id) = response_json.get("image_id").and_then(|id| id.as_str()) {
+                                        if let Some(additional_views) = response_json.get("views").and_then(|v| v.as_u64()) {
+                                            println!(
+                                                "[P2P Listener] Automatically handling 'increase_approved' for image '{}' with {} additional views.",
+                                                image_id, additional_views
+                                            );
+                                            p2p::handle_increase_views_response(image_id, additional_views as u32, true).await;
+                                        } else {
+                                            eprintln!("[P2P Listener] Missing or invalid 'views' in 'increase_approved' payload.");
+                                        }
                                     } else {
-                                        eprintln!("[P2P Listener] Missing or invalid 'views' in 'increase_approved' payload.");
+                                        eprintln!("[P2P Listener] Missing 'image_id' in 'increase_approved' payload.");
                                     }
-                                } else {
-                                    eprintln!("[P2P Listener] Missing 'image_id' in 'increase_approved' payload.");
+                                }
+        
+                                // *** Automatically handle "increase_rejected" ***
+                                "increase_rejected" => {
+                                    if let Some(image_id) = response_json.get("image_id").and_then(|id| id.as_str()) {
+                                        if let Some(additional_views) = response_json.get("views").and_then(|v| v.as_u64()) {
+                                            println!(
+                                                "[P2P Listener] Automatically handling 'increase_approved' for image '{}' with {} additional views.",
+                                                image_id, additional_views
+                                            );
+                                            p2p::handle_increase_views_response(image_id, additional_views as u32, false).await;
+                                        } else {
+                                            eprintln!("[P2P Listener] Missing or invalid 'views' in 'increase_approved' payload.");
+                                        }
+                                    } else {
+                                        eprintln!("[P2P Listener] Missing 'image_id' in 'increase_approved' payload.");
+                                    }
+                                }
+                                "rejection_ack" => {
+                                    if let Some(image_id) = response_json.get("image_id").and_then(|id| id.as_str()) {
+                                        if let Some(status) = response_json.get("status").and_then(|s| s.as_str()) {
+                                            println!(
+                                                "[P2P Listener] Received rejection acknowledgment for image '{}' with status '{}'.",
+                                                image_id, status
+                                            );
+                                            // Additional logic for handling acknowledgment can be added here
+                                        } else {
+                                            eprintln!("[P2P Listener] Missing 'status' in 'rejection_ack' payload.");
+                                        }
+                                    } else {
+                                        eprintln!("[P2P Listener] Missing 'image_id' in 'rejection_ack' payload.");
+                                    }
+                                }
+                                // *** Add other payloads to the queue ***
+                                _ => {
+                                    println!(
+                                        "[P2P Listener] Adding payload of type '{}' from {} to the queue.",
+                                        response_type, src
+                                    );
+                                    let mut queue = request_queue_clone.lock().await;
+                                    queue.push_back((src, received_data)); // Add the payload to the queue
                                 }
                             }
-    
-                            // *** Automatically handle "increase_rejected" ***
-                            "increase_rejected" => {
-                                if let Some(image_id) = response_json.get("image_id").and_then(|id| id.as_str()) {
-                                    if let Some(additional_views) = response_json.get("views").and_then(|v| v.as_u64()) {
-                                        println!(
-                                            "[P2P Listener] Automatically handling 'increase_approved' for image '{}' with {} additional views.",
-                                            image_id, additional_views
-                                        );
-                                        p2p::handle_increase_views_response(image_id, additional_views as u32, false).await;
-                                    } else {
-                                        eprintln!("[P2P Listener] Missing or invalid 'views' in 'increase_approved' payload.");
-                                    }
-                                } else {
-                                    eprintln!("[P2P Listener] Missing 'image_id' in 'increase_approved' payload.");
-                                }
-                            }
-                            "rejection_ack" => {
-                                if let Some(image_id) = response_json.get("image_id").and_then(|id| id.as_str()) {
-                                    if let Some(status) = response_json.get("status").and_then(|s| s.as_str()) {
-                                        println!(
-                                            "[P2P Listener] Received rejection acknowledgment for image '{}' with status '{}'.",
-                                            image_id, status
-                                        );
-                                        // Additional logic for handling acknowledgment can be added here
-                                    } else {
-                                        eprintln!("[P2P Listener] Missing 'status' in 'rejection_ack' payload.");
-                                    }
-                                } else {
-                                    eprintln!("[P2P Listener] Missing 'image_id' in 'rejection_ack' payload.");
-                                }
-                            }
-                            // *** Add other payloads to the queue ***
-                            _ => {
-                                println!(
-                                    "[P2P Listener] Adding payload of type '{}' from {} to the queue.",
-                                    response_type, src
-                                );
-                                let mut queue = request_queue_clone.lock().await;
-                                queue.push_back((src, received_data)); // Add the payload to the queue
-                            }
+                        } else {
+                            eprintln!("[P2P Listener] Malformed payload: Missing 'type' field.");
                         }
                     } else {
-                        eprintln!("[P2P Listener] Malformed payload: Missing 'type' field.");
+                        eprintln!("[P2P Listener] Failed to parse received data as JSON: {}", received_data);
                     }
-                } else {
-                    eprintln!("[P2P Listener] Failed to parse received data as JSON: {}", received_data);
                 }
             }
         }
-    }
-});
+    });
     
-    // Spawn P2P listener task
-    // let p2p_socket_clone = Arc::clone(&p2p_socket);
-    // tokio::spawn(async move {
-    //     let mut buffer = [0u8; 1024];
-    //     loop {
-    //          println!("Hellooo");
-    //         if let Ok((size, src)) = p2p_socket_clone.recv_from(&mut buffer).await {
-    //             let request = String::from_utf8_lossy(&buffer[..size]).to_string();
-    //             println!("[P2P Listener] Received request: {} from {}", request, src);
-
-    //             if let Ok(request_json) = serde_json::from_str::<serde_json::Value>(&request) {
-    //                 if let Some(request_type) = request_json.get("type").and_then(|t| t.as_str()) {
-    //                     match request_type {
-    //                         "image_request" => {
-    //                             if let Some(image_id) = request_json.get("image_id").and_then(|id| id.as_str()) {
-    //                                 if let Some(requested_views) = request_json.get("views").and_then(|v| v.as_u64()) {
-    //                                     let views = requested_views as u16;
-    //                                     println!("received request for image from {}", src.to_string());
-    //                                     if let Err(e) = p2p::respond_to_request(
-    //                                         &p2p_socket_clone,
-    //                                         image_id,
-    //                                         views,
-    //                                         &src.to_string(),
-    //                                     )
-    //                                     .await
-    //                                     {
-    //                                         eprintln!("[P2P Listener] Error responding to request: {}", e);
-    //                                     }
-    //                                 } else {
-    //                                     eprintln!("[P2P Listener] Missing or invalid 'views' field in request");
-    //                                 }
-    //                             } else {
-    //                                 eprintln!("[P2P Listener] Missing 'image_id' in request");
-    //                             }
-    //                         }
-                            // "image_response" => {
-                            //     if let Some(image_id) = request_json.get("image_id").and_then(|id| id.as_str()) {
-                            //         if let Some(encoded_data) = request_json.get("data").and_then(|d| d.as_str()) {
-                            //             match base64::decode(encoded_data) {
-                            //                 Ok(image_data) => {
-                            //                     if let Err(e) = p2p::store_received_image(image_id, &image_data).await {
-                            //                         eprintln!("[P2P Listener] Failed to store image: {}", e);
-                            //                     }
-                            //                 }
-                            //                 Err(e) => eprintln!("[P2P Listener] Failed to decode image data: {}", e),
-                            //             }
-                            //         } else {
-                            //             eprintln!("[P2P Listener] Missing or invalid 'data' field in response");
-                            //         }
-                            //     } else {
-                            //         eprintln!("[P2P Listener] Missing 'image_id' in response");
-                            //     }
-                            // }
-    //                         _ => eprintln!("[P2P Listener] Unknown request type: {}", request_type),
-    //                     }
-    //                 } else {
-    //                     eprintln!("[P2P Listener] Malformed request: Missing 'type'");
-    //                 }
-    //             } else {
-    //                 eprintln!("[P2P Listener] Failed to parse request as JSON");
-    //             }
-    //         }
-    //     }
-    // });
+    
 
     loop {
         // Authentication menu
@@ -201,9 +142,14 @@ async fn main() -> io::Result<()> {
 
         match choice {
             "1" => {
+                // Generate a random seed for the RNG
+                let seed: [u8; 32] = [0; 32];
+                let mut rng = StdRng::from_seed(seed);
+                let random_num: i32 = rng.gen();
                 // Create the registration JSON payload
                 let register_json = json!({
-                    "type": "register"
+                    "type": "register",
+                    "randam_number": random_num,
                 });
 
                 // Multicast registration request with the JSON payload
@@ -229,6 +175,11 @@ async fn main() -> io::Result<()> {
                 println!("Returning to the main menu...");
             }
             "2" => {
+                // Generate a random seed for the RNG
+                let seed: [u8; 32] = [0; 32];
+                let mut rng = StdRng::from_seed(seed);
+                let random_num: i32 = rng.gen();
+                // start the logic 
                 print!("Enter your user ID: ");
                 io::stdout().flush()?;
                 let mut user_id_input = String::new();
@@ -261,7 +212,8 @@ async fn main() -> io::Result<()> {
                 let auth_json = json!({
                     "type": "sign_in",
                     "user_id": user_id,
-                    "p2p_socket": p2p_formatted_socket
+                    "p2p_socket": p2p_formatted_socket,
+                    "randam_number": random_num,
                 });
 
                 // Multicast sign-in request
@@ -297,6 +249,11 @@ async fn main() -> io::Result<()> {
 
                         match menu_choice {
                             "1" => {
+                                // generate random seed for the RNG
+                                let seed: [u8; 32] = [0; 32];
+                                let mut rng = StdRng::from_seed(seed);
+                                let mut random_num: i32 = rng.gen();
+
                                 // User input: image path and resource ID
                                 let mut input = String::new();
                                 print!("Enter the path to the image: ");
@@ -343,7 +300,8 @@ async fn main() -> io::Result<()> {
                                 // Create the concatenated resource ID
                                 let resource_id = format!("client{}-{}", user_id, resource_name);
                                 // create json as string that has used_id and resource_id
-                                let welcome_message = format!("{},{}", user_id, resource_id);
+                                //craft welcome message to to has the  user_id, resource_id and counter
+                                let welcome_message = format!("{},{},{}", user_id, resource_id,random_num); 
 
                                 println!("Concatenated Resource ID: {}", resource_id);
 
@@ -587,10 +545,16 @@ async fn main() -> io::Result<()> {
                                 }
                             } 
                             "6" => {
+                                // Generate a random seed for the RNG
+                                let seed: [u8; 32] = [0; 32];
+                                let mut rng = StdRng::from_seed(seed);
+                                let random_num: i32 = rng.gen();
+                                 
                                 // Multicast shutdown request
                                 let shutdown_json = json!({
                                     "type": "shutdown",
-                                    "user_id": user_id
+                                    "user_id": user_id,
+                                    "randam_number": random_num,
                                 });
 
                                 let (server_addr, shutdown_response) =
