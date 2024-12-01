@@ -62,10 +62,22 @@ async fn main() -> io::Result<()> {
                                     if let Some(image_id) = response_json.get("image_id").and_then(|id| id.as_str()) {
                                         if let Some(additional_views) = response_json.get("views").and_then(|v| v.as_u64()) {
                                             println!(
-                                                "[P2P Listener] Automatically handling 'increase_approved' for image '{}' with {} additional views.",
+                                                "[P2P Listener] Handling 'increase_approved' for image '{}' with {} additional views.",
                                                 image_id, additional_views
                                             );
                                             p2p::handle_increase_views_response(image_id, additional_views as u32, true).await;
+                                            
+                                            // Send acknowledgment
+                                            let ack_message = json!({
+                                                "type": "increase_approved_ack",
+                                                "status": "received",
+                                                "image_id": image_id
+                                            }).to_string();
+                                            if let Err(e) = p2p_socket_clone.send_to(ack_message.as_bytes(), src).await {
+                                                eprintln!("[P2P Listener] Failed to send acknowledgment: {}", e);
+                                            } else {
+                                                println!("[P2P Listener] Sent acknowledgment for 'increase_approved' to {}", src);
+                                            }
                                         } else {
                                             eprintln!("[P2P Listener] Missing or invalid 'views' in 'increase_approved' payload.");
                                         }
@@ -79,15 +91,27 @@ async fn main() -> io::Result<()> {
                                     if let Some(image_id) = response_json.get("image_id").and_then(|id| id.as_str()) {
                                         if let Some(additional_views) = response_json.get("views").and_then(|v| v.as_u64()) {
                                             println!(
-                                                "[P2P Listener] Automatically handling 'increase_approved' for image '{}' with {} additional views.",
+                                                "[P2P Listener] Handling 'increase_rejected' for image '{}' with {} additional views.",
                                                 image_id, additional_views
                                             );
                                             p2p::handle_increase_views_response(image_id, additional_views as u32, false).await;
+        
+                                            // Send acknowledgment
+                                            let ack_message = json!({
+                                                "type": "increase_rejected_ack",
+                                                "status": "received",
+                                                "image_id": image_id
+                                            }).to_string();
+                                            if let Err(e) = p2p_socket_clone.send_to(ack_message.as_bytes(), src).await {
+                                                eprintln!("[P2P Listener] Failed to send acknowledgment: {}", e);
+                                            } else {
+                                                println!("[P2P Listener] Sent acknowledgment for 'increase_rejected' to {}", src);
+                                            }
                                         } else {
-                                            eprintln!("[P2P Listener] Missing or invalid 'views' in 'increase_approved' payload.");
+                                            eprintln!("[P2P Listener] Missing or invalid 'views' in 'increase_rejected' payload.");
                                         }
                                     } else {
-                                        eprintln!("[P2P Listener] Missing 'image_id' in 'increase_approved' payload.");
+                                        eprintln!("[P2P Listener] Missing 'image_id' in 'increase_rejected' payload.");
                                     }
                                 }
                                 // *** Add other payloads to the queue ***

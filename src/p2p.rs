@@ -358,25 +358,67 @@ pub async fn respond_to_increase_views(
     peer_addr: &str,
     approved: bool
 ) -> Result<(), Box<dyn std::error::Error>> {
-
-    if approved {
-        let response = json!({
+    let response = if approved {
+        json!({
             "type": "increase_approved",
-            "views" : requested_views,
+            "views": requested_views,
             "image_id": image_id
-        });
-        socket.send_to(response.to_string().as_bytes(), peer_addr).await?;
-    }
-    else {
-        let response = json!({
+        })
+    } else {
+        json!({
             "type": "increase_rejected",
-            "views" : requested_views,
+            "views": requested_views,
             "image_id": image_id
-        });
-        socket.send_to(response.to_string().as_bytes(), peer_addr).await?;
+        })
+    };
+
+    socket.send_to(response.to_string().as_bytes(), peer_addr).await?;
+    println!(
+        "Sent response to {}: {}",
+        peer_addr,
+        if approved { "increase_approved" } else { "increase_rejected" }
+    );
+
+    // Wait for acknowledgment
+    let mut ack_buf = [0u8; 1024];
+    match timeout(Duration::from_secs(5), socket.recv_from(&mut ack_buf)).await {
+        Ok(Ok((size, src_addr))) => {
+            if let Ok(ack_json) = serde_json::from_slice::<serde_json::Value>(&ack_buf[..size]) {
+                let ack_type = if approved {
+                    "increase_approved_ack"
+                } else {
+                    "increase_rejected_ack"
+                };
+
+                if ack_json.get("type") == Some(&serde_json::Value::String(ack_type.to_string()))
+                    && ack_json.get("image_id") == Some(&serde_json::Value::String(image_id.to_string()))
+                {
+                    println!("Received '{}' acknowledgment from {}", ack_type, src_addr);
+                } else {
+                    println!(
+                        "Received acknowledgment, but it is not a valid '{}': {:?}",
+                        ack_type, ack_json
+                    );
+                }
+            } else {
+                println!("Failed to parse acknowledgment as JSON.");
+            }
+        }
+        Ok(Err(e)) => {
+            eprintln!("Error receiving acknowledgment: {}", e);
+        }
+        Err(_) => {
+            println!(
+                "Timed out waiting for '{}' acknowledgment for image '{}'.",
+                if approved { "increase_approved_ack" } else { "increase_rejected_ack" },
+                image_id
+            );
+        }
     }
+
     Ok(())
 }
+
 
 /// Stores received images and metadata.
 ///
