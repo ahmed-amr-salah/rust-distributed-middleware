@@ -220,7 +220,7 @@ async fn main() -> io::Result<()> {
                 // Handle registration response
                 if let Some(user_id) = response_json.get("user_id").and_then(|id| id.as_u64()) {
                     let user_id_str = user_id.to_string(); // Convert u64 to String for saving
-                    authentication::save_user_id(&user_id_str, Path::new("user.json"))?;
+                    authentication::save_user_id(&user_id_str, Path::new("../user.json"))?;
                     println!("Registration successful! User ID: {}", user_id);
                 } else {
                     eprintln!("Error: Failed to retrieve user_id from server response.");
@@ -243,6 +243,17 @@ async fn main() -> io::Result<()> {
                         continue; // Return to the main menu
                     }
                 };
+
+                // Save the entered user_id to user.json
+                let user_id_str = user_id.to_string(); // Convert to string for saving
+                let user_data = json!({ "user_id": user_id_str });
+
+                if let Err(e) = std::fs::write("../user.json", user_data.to_string()) {
+                    eprintln!("Failed to overwrite user.json with new user ID: {}", e);
+                } else {
+                    println!("User ID saved successfully to user.json.");
+                }
+                
                 let local_addr = p2p_socket.local_addr()?;
                 // Format the address as ip_address:port
                 let p2p_formatted_socket = local_addr.to_string();
