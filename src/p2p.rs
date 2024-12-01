@@ -408,7 +408,7 @@ pub async fn store_received_image(
 
 pub async fn handle_increase_views_response(image_id: &str, extra_views: u32, approved: bool) -> Result<(), Box<dyn std::error::Error>> {
     // Path to the JSON file storing the views
-    let json_file_path = Path::new("image_views.json");
+    let json_file_path = Path::new("../Peer_Images/images_views.json");
 
     // Check if the request is approved
     if approved {
