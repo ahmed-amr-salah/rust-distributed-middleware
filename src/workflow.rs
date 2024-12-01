@@ -44,7 +44,7 @@ pub async fn find_server_for_resource(
 
     // Wait for a response
     for _ in 0..server_ips.len() {
-        match timeout(Duration::from_secs(5), socket.recv_from(&mut buffer)).await {
+        match timeout(Duration::from_secs(7), socket.recv_from(&mut buffer)).await {
             Ok(Ok((size, src))) if size == 2 => {
                 let port = u16::from_be_bytes([buffer[0], buffer[1]]);
                 return Ok(Some((src.ip().to_string(), port)));

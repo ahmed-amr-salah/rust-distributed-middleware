@@ -116,7 +116,7 @@ pub async fn multicast_request_with_payload(
     }
 
     // Wait for a response from any server
-    match timeout(Duration::from_secs(5), socket.recv_from(&mut buffer)).await {
+    match timeout(Duration::from_secs(7), socket.recv_from(&mut buffer)).await {
         Ok(Ok((size, src))) => {
             let response = String::from_utf8_lossy(&buffer[..size]);
             let response_json: serde_json::Value = serde_json::from_str(&response).unwrap_or_else(|_| {
