@@ -136,13 +136,38 @@ pub async fn send_image_payload_over_udp(
 
             let mut ack_buf = [0u8; 4];
             match timeout(Duration::from_secs(2), socket.recv_from(&mut ack_buf)).await {
-                Ok(Ok((size, _))) if size == 4 => {
-                    let ack_id = u32::from_be_bytes(ack_buf);
-                    if ack_id == i as u32 {
-                        println!("Received acknowledgment for chunk {}", i + 1);
-                        break;
-                    } else {
-                        println!("Mismatched acknowledgment, retrying...");
+                Ok(Ok((size, _))) => {
+                    // Try to parse the acknowledgment as JSON
+                    if let Ok(ack_json) = serde_json::from_slice::<Value>(&ack_buf[..size]) {
+                        if let Some(ack_type) = ack_json.get("type").and_then(|v| v.as_str()) {
+                            if ack_type == "rejection_ack" {
+                                if let Some(ack_image_id) = ack_json.get("image_id").and_then(|v| v.as_str()) {
+                                    if ack_image_id == image_id {
+                                        println!(
+                                            "Received 'rejection_ack' acknowledgment for image '{}', chunk {}",
+                                            image_id, i + 1
+                                        );
+                                        break;
+                                    } else {
+                                        println!(
+                                            "Mismatched 'rejection_ack' acknowledgment, expected image_id '{}', got '{}'",
+                                            image_id, ack_image_id
+                                        );
+                                    }
+                                }
+                            } else {
+                                println!("Received non-'rejection_ack' acknowledgment: {:?}", ack_json);
+                            }
+                        }
+                    } else if size == 4 {
+                        // Fallback to handling chunk-based acknowledgments
+                        let ack_id = u32::from_be_bytes(ack_buf[..4].try_into().unwrap());
+                        if ack_id == i as u32 {
+                            println!("Received chunk acknowledgment for chunk {}", i + 1);
+                            break;
+                        } else {
+                            println!("Mismatched acknowledgment, retrying...");
+                        }
                     }
                 }
                 _ => {
@@ -151,7 +176,6 @@ pub async fn send_image_payload_over_udp(
             }
         }
     }
-
     // Send an empty packet to indicate the end of transmission
     socket.send_to(&[], (dest_ip, port)).await?;
     println!("Finished sending payload for image {}", image_id);

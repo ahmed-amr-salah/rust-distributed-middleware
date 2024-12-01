@@ -90,21 +90,6 @@ async fn main() -> io::Result<()> {
                                         eprintln!("[P2P Listener] Missing 'image_id' in 'increase_approved' payload.");
                                     }
                                 }
-                                "rejection_ack" => {
-                                    if let Some(image_id) = response_json.get("image_id").and_then(|id| id.as_str()) {
-                                        if let Some(status) = response_json.get("status").and_then(|s| s.as_str()) {
-                                            println!(
-                                                "[P2P Listener] Received rejection acknowledgment for image '{}' with status '{}'.",
-                                                image_id, status
-                                            );
-                                            // Additional logic for handling acknowledgment can be added here
-                                        } else {
-                                            eprintln!("[P2P Listener] Missing 'status' in 'rejection_ack' payload.");
-                                        }
-                                    } else {
-                                        eprintln!("[P2P Listener] Missing 'image_id' in 'rejection_ack' payload.");
-                                    }
-                                }
                                 // *** Add other payloads to the queue ***
                                 _ => {
                                     println!(
