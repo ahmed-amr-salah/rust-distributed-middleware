@@ -1,1 +1,7 @@
-{"user_id":"9"}
+<<<<<<< HEAD
+{
+  "user_id": "9"
+}
+=======
+{"user_id":"4"}
+>>>>>>> e6ab120 (update access rights upon sign-in)
