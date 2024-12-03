@@ -157,11 +157,10 @@ pub fn update_access_rights(
     number_views: i32,
 ) -> serde_json::Value {
     // Step 1: Retrieve client_id based on client_IP
+    // Use tuple for parameter passing
     let client_id: Option<u64> = match conn.exec_first(
-        "SELECT ID FROM clients WHERE IP_port = :client_IP",
-        params! {
-            "client_IP" => client_IP,
-        },
+        "SELECT ID FROM clients WHERE IP_port = ?",  // Placeholder '?' for the parameter
+        (client_IP,),  // Pass the parameter as a tuple
     ) {
         Ok(Some(id)) => Some(id),
         Ok(None) => None,
@@ -198,7 +197,6 @@ pub fn update_access_rights(
         "status": "success"
     })
 }
-
 
 
 
