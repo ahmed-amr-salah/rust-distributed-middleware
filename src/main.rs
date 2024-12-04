@@ -1,5 +1,5 @@
 use std::io::{self, Write, Read};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
@@ -11,8 +11,9 @@ use std::fs::File;
 use std::collections::VecDeque;
 use rand::{Rng, SeedableRng};
 use rand::rngs::StdRng;
+use tempfile::TempDir;
 mod open_image; // Add this at the top of main.rs
-use open_image::{open_image_with_default_viewer, create_temp_hidden_file};
+use open_image::open_image_with_default_viewer;
 
 
 mod authentication;
@@ -635,45 +636,76 @@ async fn main() -> io::Result<()> {
                                             return Ok(());
                                         }
 
-                                        // DECODING
-                                        match create_temp_hidden_file(selected_image_id.clone()) {
-                                            Ok(hidden_file_path) => {
-                                                println!("Temporary hidden file path: {:?}", hidden_file_path);
-                                                tokio::task::spawn_blocking({
-                                                    let enc_img_path = enc_img_path.clone();
-                                                    let hidden_file_path = hidden_file_path.clone();           // Clone to avoid move issues
-                                                    move || {
-                                                        decode::decode_image(
-                                                            enc_img_path.as_str(),
-                                                            hidden_file_path.as_os_str().to_string_lossy().as_ref(),
-                                                        )
-                                                    }
-                                                })
-                                                .await?;
+                                        // Ensure create_temp_hidden_file returns a tuple (TempDir, PathBuf)
+                                        let temp_dir = TempDir::new()?;
+                                        // Construct the hidden file path in the temporary directory
+                                        let hidden_file_path = temp_dir.path().join(format!("{}.png", selected_image_id.clone()));
 
-                                                println!(
-                                                    "Hidden image successfully extracted and saved at: {}",
-                                                    hidden_file_path.display()
-                                                );
-        
-                                                // Step 6: Open the image using the system's default viewer
-                                                println!("Image Path is {}", hidden_file_path.display());
-                                                if let Err(e) = open_image_with_default_viewer(hidden_file_path.as_os_str().to_string_lossy().as_ref()).await {
-                                                    eprintln!("Error: {}", e);
-                                                }
-                                                // Step 7: Decrement the view count
-                                            
-                                                *image_views.get_mut(&selected_image_id).unwrap() = Value::from(remaining_views - 1);
-                                                println!(
-                                                    "Remaining views for image {}: {}",
-                                                    selected_image_id,
-                                                    remaining_views - 1
-                                                );
-                                            }
-                                            Err(e) => {
-                                                eprintln!("Error creating temporary file: {}", e);
-                                            }
+                                        // Pass the `hidden_file_path` to the decoding function
+                                        tokio::task::spawn_blocking({
+                                        let enc_img_path = enc_img_path.clone();
+                                        let hidden_file_path = hidden_file_path.clone(); // Clone to avoid move issues
+                                        move || {
+                                            decode::decode_image(
+                                                enc_img_path.as_str(),
+                                                hidden_file_path.as_os_str().to_string_lossy().as_ref(),
+                                            )
                                         }
+                                        })
+                                        .await?;
+
+                                        // Step 6: Open the image using the system's default viewer
+                                        println!("Image Path is {}", hidden_file_path.display());
+                                        if let Err(e) = open_image_with_default_viewer(hidden_file_path.as_os_str().to_string_lossy().as_ref()).await {
+                                        eprintln!("Error: {}", e);
+                                        }
+
+                                        // Step 7: Decrement the view count
+                                        *image_views.get_mut(&selected_image_id).unwrap() = Value::from(remaining_views - 1);
+                                        println!(
+                                        "Remaining views for image {}: {}",
+                                        selected_image_id,
+                                        remaining_views - 1
+                                        );
+
+                                        // match create_temp_hidden_file(selected_image_id.clone()) {
+                                        //     Ok(hidden_file_path) => {
+                                        //         println!("Temporary hidden file path: {:?}", hidden_file_path);
+                                        //         tokio::task::spawn_blocking({
+                                        //             let enc_img_path = enc_img_path.clone();
+                                        //             let hidden_file_path = hidden_file_path.clone();           // Clone to avoid move issues
+                                        //             move || {
+                                        //                 decode::decode_image(
+                                        //                     enc_img_path.as_str(),
+                                        //                     hidden_file_path.as_os_str().to_string_lossy().as_ref(),
+                                        //                 )
+                                        //             }
+                                        //         })
+                                        //         .await?;
+
+                                        //         println!(
+                                        //             "Hidden image successfully extracted and saved at: {}",
+                                        //             hidden_file_path.display()
+                                        //         );
+        
+                                        //         // Step 6: Open the image using the system's default viewer
+                                        //         println!("Image Path is {}", hidden_file_path.display());
+                                        //         if let Err(e) = open_image_with_default_viewer(hidden_file_path.as_os_str().to_string_lossy().as_ref()).await {
+                                        //             eprintln!("Error: {}", e);
+                                        //         }
+                                        //         // Step 7: Decrement the view count
+                                            
+                                        //         *image_views.get_mut(&selected_image_id).unwrap() = Value::from(remaining_views - 1);
+                                        //         println!(
+                                        //             "Remaining views for image {}: {}",
+                                        //             selected_image_id,
+                                        //             remaining_views - 1
+                                        //         );
+                                        //     }
+                                        //     Err(e) => {
+                                        //         eprintln!("Error creating temporary file: {}", e);
+                                        //     }
+                                        //}
                       
                                     } else {
                                         println!("Ran out of viewing rights");
