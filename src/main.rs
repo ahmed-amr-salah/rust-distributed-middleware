@@ -692,84 +692,118 @@ async fn main() -> io::Result<()> {
                                 
                             }
                             "7" => {
-                                // Path to the JSON file
-                                let json_file_path = "../sent_images_data.json";
+                                    // Path to the JSON file
+                                    let json_file_path = "../sent_images_data.json";
 
-                                // Check if the JSON file exists
-                                let sent_images_data: serde_json::Value = if Path::new(json_file_path).exists() {
-                                    // Read and parse the JSON file
-                                    match fs::read_to_string(json_file_path) {
-                                        Ok(contents) => serde_json::from_str(&contents).unwrap_or_else(|_| {
-                                            println!("Invalid JSON format in {}. Starting with an empty structure.", json_file_path);
-                                            serde_json::json!({})
-                                        }),
-                                        Err(_) => {
-                                            println!("Failed to read {}. Starting with an empty structure.", json_file_path);
-                                            serde_json::json!({})
+                                    // Check if the JSON file exists
+                                    let sent_images_data: serde_json::Value = if Path::new(json_file_path).exists() {
+                                        match fs::read_to_string(json_file_path) {
+                                            Ok(contents) => serde_json::from_str(&contents).unwrap_or_else(|_| {
+                                                println!("Invalid JSON format in {}. Starting with an empty structure.", json_file_path);
+                                                serde_json::json!({})
+                                            }),
+                                            Err(_) => {
+                                                println!("Failed to read {}. Starting with an empty structure.", json_file_path);
+                                                serde_json::json!({})
+                                            }
                                         }
-                                    }
-                                } else {
-                                    println!("No previous records found. Ensure the JSON file exists or start by approving some requests.");
-                                    continue;
-                                };
+                                    } else {
+                                        println!("No previous records found. Ensure the JSON file exists or start by approving some requests.");
+                                        continue;
+                                    };
 
-                                // Display the clients and their sent images
-                                println!("Clients and their sent images:");
-                                if let Some(data_map) = sent_images_data.as_object() {
-                                    let mut client_list: Vec<(String, Vec<String>)> = vec![];
+                                    // Display the clients and their sent images
+                                    println!("Clients and their sent images:");
+                                    if let Some(data_map) = sent_images_data.as_object() {
+                                        let mut client_list: Vec<(String, Vec<String>)> = vec![];
 
-                                    for (client_id, images) in data_map {
-                                        if let Some(images_array) = images.as_array() {
-                                            let image_ids: Vec<String> = images_array
-                                                .iter()
-                                                .filter_map(|image| image.as_str().map(|s| s.to_string()))
-                                                .collect();
-                                            client_list.push((client_id.clone(), image_ids));
+                                        for (client_id, images) in data_map {
+                                            if let Some(images_array) = images.as_array() {
+                                                let image_ids: Vec<String> = images_array
+                                                    .iter()
+                                                    .filter_map(|image| image.as_str().map(|s| s.to_string()))
+                                                    .collect();
+                                                client_list.push((client_id.clone(), image_ids));
+                                            }
                                         }
+
+                                        // Display the clients and their images
+                                        for (index, (client_id, images)) in client_list.iter().enumerate() {
+                                            println!("{}: Client ID: {} - Images: {:?}", index + 1, client_id, images);
+                                        }
+
+                                        println!("Enter the number of the client to update access rights:");
+                                        let mut input = String::new();
+                                        io::stdin().read_line(&mut input)?;
+                                        let client_index = input.trim().parse::<usize>().unwrap_or(0) - 1;
+
+                                        if client_index >= client_list.len() {
+                                            println!("Invalid selection.");
+                                            continue;
+                                        }
+
+                                        let (client_id, images) = &client_list[client_index];
+
+                                        println!("Available images from Client ID {}: {:?}", client_id, images);
+
+                                        println!("Enter the image ID to update access rights:");
+                                        let mut image_input = String::new(); // Create a new variable
+                                        io::stdin().read_line(&mut image_input)?;
+                                        let image_id = image_input.trim(); // Use the new variable here
+
+                                        if !images.contains(&image_id.to_string()) {
+                                            println!("Invalid image ID for the selected client.");
+                                            continue;
+                                        }
+
+                                        println!("Enter the number of views to add/remove (negative to remove):");
+                                        let mut delta_input = String::new(); // Another new variable
+                                        io::stdin().read_line(&mut delta_input)?;
+                                        let view_delta = delta_input.trim().parse::<i32>().unwrap_or(0);
+
+                                        let socket_for_update = Arc::new(UdpSocket::bind("0.0.0.0:0").await?);
+
+                                        // Fetch the active users to find the socket address for the client
+                                        let active_users = workflow::get_active_users(&socket_for_update, &config).await?;
+
+                                        // Attempt to find the client's address in the active users list
+                                        if let Some(peer_addr) = active_users.iter().find_map(|(addr, _)| {
+                                            if addr.ends_with(client_id) {
+                                                Some(addr.clone())
+                                            } else {
+                                                None
+                                            }
+                                        }) {
+                                            // Send the update access request to the active client
+                                            if let Err(e) = p2p::send_update_access_request(&socket_for_update, &peer_addr, image_id, view_delta).await {
+                                                eprintln!("Failed to send update access request: {}", e);
+                                            }
+                                        } else {
+                                            // Client is offline; send the notification to the server
+                                            let update_request = json!({
+                                                "type": "change-view",
+                                                "client_id": client_id,
+                                                "image_id": image_id,
+                                                "view_delta": view_delta,
+                                            });
+
+                                            let (server_addr, response) = communication::multicast_request_with_payload(
+                                                &socket_for_update,
+                                                update_request.to_string(),
+                                                &config.server_ips,
+                                                config.request_port,
+                                            )
+                                            .await?;
+
+                                            println!(
+                                                "Client is offline. Update request forwarded to server at {}. Response: {}",
+                                                server_addr, response
+                                            );
+                                        }
+                                    } else {
+                                        println!("No valid client data found in {}.", json_file_path);
                                     }
-
-                                    // Display the clients and their images
-                                    for (index, (client_id, images)) in client_list.iter().enumerate() {
-                                        println!("{}: Client ID: {} - Images: {:?}", index + 1, client_id, images);
-                                    }
-
-                                    println!("Enter the number of the client to update access rights:");
-                                    let mut input = String::new();
-                                    io::stdin().read_line(&mut input)?;
-                                    let client_index = input.trim().parse::<usize>().unwrap_or(0) - 1;
-
-                                    if client_index >= client_list.len() {
-                                        println!("Invalid selection.");
-                                        continue;
-                                    }
-
-                                    let (client_id, images) = &client_list[client_index];
-
-                                    println!("Available images from Client ID {}: {:?}", client_id, images);
-
-                                    println!("Enter the image ID to update access rights:");
-                                    let mut image_input = String::new(); // Create a new variable
-                                    io::stdin().read_line(&mut image_input)?;
-                                    let image_id = image_input.trim(); // Use the new variable here
-
-                                    if !images.contains(&image_id.to_string()) {
-                                        println!("Invalid image ID for the selected client.");
-                                        continue;
-                                    }
-
-                                    println!("Enter the number of views to add/remove (negative to remove):");
-                                    let mut delta_input = String::new(); // Another new variable
-                                    io::stdin().read_line(&mut delta_input)?;
-                                    let view_delta = delta_input.trim().parse::<i32>().unwrap_or(0);
-
-                                    // Send the update access request
-                                    if let Err(e) = p2p::send_update_access_request(&p2p_socket, client_id, image_id, view_delta).await {
-                                        eprintln!("Failed to send update access request: {}", e);
-                                    }
-                                } else {
-                                    println!("No valid client data found in {}.", json_file_path);
                                 }
-                            }
 
                             "8" => {
                                 // Generate a random seed for the RNG

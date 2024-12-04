@@ -670,7 +670,11 @@ pub async fn send_update_access_request(
         "image_id": image_id,
         "view_delta": view_delta,
     });
-
+    println!(
+        "Sending update access request to peer address: {}, using socket: {}",
+        peer_addr,
+        socket.local_addr()?
+    );
     socket.send_to(update_request.to_string().as_bytes(), peer_addr).await?;
     println!("Sent update access request to {} for image {}: delta {}", peer_addr, image_id, view_delta);
 
@@ -694,12 +698,12 @@ pub async fn send_update_access_request(
 }
 
 
-
 pub async fn handle_update_access_request(
     socket: &UdpSocket,
     request: serde_json::Value,
     sender_addr: &str,
 ) -> io::Result<()> {
+    // Extract image ID and view delta from the request
     let image_id = request.get("image_id").and_then(|id| id.as_str()).ok_or_else(|| {
         io::Error::new(io::ErrorKind::InvalidData, "Missing or invalid image_id in request")
     })?;
@@ -709,54 +713,58 @@ pub async fn handle_update_access_request(
 
     println!("Processing access update request for image {}: delta {}", image_id, view_delta);
 
-    // Load and decode the image
-    let image_path = Path::new("../Peer_Images").join(format!("{}_encrypted.png", image_id));
-    let encoded_image = image::open(&image_path).map_err(|err| {
-        io::Error::new(
-            io::ErrorKind::NotFound,
-            format!("Failed to open image at {:?}: {}", image_path, err),
-        )
-    })?;
-    let (current_views, decoded_image) = decode_access_rights(encoded_image).map_err(|err| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("Failed to decode access rights: {}", err),
-        )
-    })?;
+    // Path to the images_views.json file
+    let json_file_path = Path::new("../Peer_Images/images_views.json");
 
-    // Update access rights
-    let new_views = if view_delta < 0 {
-        current_views.saturating_sub(view_delta.abs() as u16)
+    // Read the current data from the JSON file
+    let mut image_views: serde_json::Map<String, serde_json::Value> = if json_file_path.exists() {
+        match tokio::fs::read_to_string(json_file_path).await {
+            Ok(contents) => serde_json::from_str(&contents).unwrap_or_else(|_| {
+                println!("Invalid JSON format in {}. Starting with an empty structure.", json_file_path.display());
+                serde_json::Map::new()
+            }),
+            Err(_) => {
+                println!("Failed to read {}. Starting with an empty structure.", json_file_path.display());
+                serde_json::Map::new()
+            }
+        }
     } else {
-        current_views.saturating_add(view_delta as u16)
+        println!("The file {} does not exist. Creating a new one.", json_file_path.display());
+        serde_json::Map::new()
     };
 
-    // Encode the new access rights
-    let updated_image = crate::p2p::encode_access_rights(image_id, sender_addr, new_views)
-        .await
-        .map_err(|err| {
-            io::Error::new(
-                io::ErrorKind::Other,
-                format!("Failed to encode access rights: {}", err),
-            )
-        })?;
+    // Update the view count for the specified image ID
+    let current_views = image_views
+        .get(image_id)
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
 
-    let mut output = Vec::new();
-    updated_image.write_to(&mut Cursor::new(&mut output), image::ImageOutputFormat::PNG).map_err(
-        |err| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("Failed to write updated image data: {}", err),
-            )
-        },
-    )?;
+    let new_views = if view_delta < 0 {
+        current_views.saturating_sub(view_delta.abs() as u64)
+    } else {
+        current_views.saturating_add(view_delta as u64)
+    };
 
-    // Save the updated image
-    let updated_path = Path::new("../Peer_Images").join(format!("{}_encrypted_updated.png", image_id));
-    tokio::fs::write(&updated_path, &output).await?;
-    println!("Updated access rights for image {}: new views = {}", image_id, new_views);
+    // Update or add the image ID with the new view count
+    image_views.insert(
+        image_id.to_string(),
+        serde_json::Value::Number(serde_json::Number::from(new_views)),
+    );
 
-    // Send acknowledgment
+    // Save the updated data back to the JSON file
+    let updated_json = serde_json::to_string_pretty(&image_views).map_err(|e| {
+        io::Error::new(io::ErrorKind::Other, format!("Failed to serialize updated JSON: {}", e))
+    })?;
+    tokio::fs::write(json_file_path, updated_json).await.map_err(|e| {
+        io::Error::new(
+            io::ErrorKind::Other,
+            format!("Failed to write updated JSON to file: {}", e),
+        )
+    })?;
+
+    println!("Updated views for image {}: new views = {}", image_id, new_views);
+
+    // Send acknowledgment to the sender
     let ack = json!({
         "type": "update_access_ack",
         "status": "success",
