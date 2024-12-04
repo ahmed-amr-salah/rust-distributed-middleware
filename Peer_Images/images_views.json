@@ -1,7 +1,8 @@
 {
-  "client1-nature_wide": 0,
+  "client1-nature_wide": 200,
   "client2-freedem-image": 0,
   "client2-image_sender_1": 0,
-  "client2-mario": 0,
+  "client2-mario": 7,
+  "client22-received_image": 4,
   "client3-flower": 7
 }

@@ -1,9 +1,7 @@
 use std::process::Command;
 use std::error::Error;
 use show_image::{create_window, ImageInfo, ImageView};
-use image::{open, ImageBuffer, Rgb};
-// use tempfile::TempDir;
-// use std::path::PathBuf;
+use image::{open, ImageBuffer, Rgb, DynamicImage, Rgba, RgbaImage};
 
 pub async fn open_image_with_default_viewer(image_path: &str) -> Result<(), Box<dyn Error>> {
     // Step 1: Open the image
@@ -27,13 +25,28 @@ pub async fn open_image_with_default_viewer(image_path: &str) -> Result<(), Box<
     Ok(())
 }
 
-// pub fn create_temp_hidden_file(image_id: String) -> std::io::Result<PathBuf> {
-//     // Create a temporary directory
-//     let temp_dir = TempDir::new()?;
+// pub fn view_cover_image_without_hidden_data(cover_image_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+//     // Open the cover image (which has the hidden image encoded in it)
+//     let cover_image = image::open(cover_image_path)?;
+    
+//     // If the image is RGBA (with an alpha channel), we can ignore the alpha channel (hidden data)
+//     if let DynamicImage::ImageRgba8(rgba_image) = cover_image {
+//         let (width, height) = rgba_image.dimensions();
+        
+//         // Create a new RGB image (without the alpha channel)
+//         let mut rgb_image: RgbaImage = RgbaImage::new(width, height);
 
-//     // Construct the hidden file path in the temporary directory
-//     let hidden_file_path = temp_dir.path().join(format!("{}.png", image_id));
+//         for (x, y, pixel) in rgba_image.enumerate_pixels() {
+//             let (r, g, b, _a) = *pixel;  // We ignore the alpha channel (_a)
+//             rgb_image.put_pixel(x, y, Rgba([r, g, b, 255]));  // Put only the RGB values
+//         }
 
-//     // Return the path to the hidden file
-//     Ok(hidden_file_path)
+//         // Save or display the image without the hidden data (alpha channel)
+//         rgb_image.save("cover_without_hidden_data.png")?;
+//         println!("Saved cover image without hidden data.");
+
+//         Ok(())
+//     } else {
+//         Err("The cover image is not RGBA.".into())
+//     }
 // }
