@@ -761,34 +761,37 @@ async fn main() -> io::Result<()> {
                                         io::stdin().read_line(&mut delta_input)?;
                                         let view_delta = delta_input.trim().parse::<i32>().unwrap_or(0);
 
-                                        let socket_for_update = Arc::new(UdpSocket::bind("0.0.0.0:0").await?);
 
                                         // Fetch the active users to find the socket address for the client
-                                        let active_users = workflow::get_active_users(&socket_for_update, &config).await?;
+                                        let active_users = workflow::get_active_users(&p2p_socket, &config).await?;
 
-                                        // Attempt to find the client's address in the active users list
-                                        if let Some(peer_addr) = active_users.iter().find_map(|(addr, _)| {
-                                            if addr.ends_with(client_id) {
-                                                Some(addr.clone())
-                                            } else {
-                                                None
-                                            }
-                                        }) {
+                                        // Attempt to find the client's index in the active users list
+                                        let user_index = active_users
+                                            .iter()
+                                            .position(|(_, images)| {
+                                                // Check if any image in the active user list belongs to the client
+                                                images.iter().any(|image_name| image_name.starts_with(&format!("client{}", client_id)))
+                                            });
+                                        let mut peer_address: Option<String> = None;
+                                        if let Some(user_index) = user_index {
+                                            let (peer_address, _) = &active_users[user_index];
+                                            println!("Found client at index {} with address {}", user_index, peer_address);
+
                                             // Send the update access request to the active client
-                                            if let Err(e) = p2p::send_update_access_request(&socket_for_update, &peer_addr, image_id, view_delta).await {
+                                            if let Err(e) = p2p::send_update_access_request(&p2p_socket, peer_address, image_id, view_delta).await {
                                                 eprintln!("Failed to send update access request: {}", e);
                                             }
                                         } else {
                                             // Client is offline; send the notification to the server
                                             let update_request = json!({
                                                 "type": "change-view",
-                                                "client_id": client_id,
+                                                "peer_address": peer_address,
                                                 "image_id": image_id,
-                                                "view_delta": view_delta,
+                                                "requested_views": view_delta,
                                             });
 
                                             let (server_addr, response) = communication::multicast_request_with_payload(
-                                                &socket_for_update,
+                                                &p2p_socket,
                                                 update_request.to_string(),
                                                 &config.server_ips,
                                                 config.request_port,
