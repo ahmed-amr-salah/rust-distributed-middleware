@@ -174,6 +174,7 @@ pub async fn request_image(
     socket: &Arc<UdpSocket>,
     config: &Config,
     channel: &Arc<Mutex<mpsc::Receiver<(String, String)>>>,
+    user_id: String,
 ) -> io::Result<()> {
     let active_users = get_active_users(socket, config).await?;
     println!("Active Users:");
@@ -212,7 +213,7 @@ pub async fn request_image(
 
     // Send P2P request
     println!("Sending request using {}", p2p_socket_response.local_addr().unwrap());
-    p2p::send_image_request(&p2p_socket_response, peer_addr, &image_id, views).await?;
+    p2p::send_image_request(&p2p_socket_response, peer_addr, &image_id, views, &user_id).await?;
 
     println!("Request sent to peer {} for image {}", peer_addr, image_id);
 

@@ -33,10 +33,12 @@ pub async fn send_image_request(
     peer_addr: &str,
     image_id: &str,
     requested_views: u16,
+    user_id: &str,
 ) -> Result<(), std::io::Error> { // Updated return type
 
     let request = json!({
         "type": "image_request",
+        "requesting_client_id": user_id,
         "image_id": image_id,
         "views": requested_views
     });
@@ -323,6 +325,7 @@ pub async fn respond_to_request(
     image_id: &str,
     requested_views: u16,
     peer_addr: &str,
+    peer_client_id: &str,
     approved: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Create a new socket bound to an ephemeral port
@@ -351,6 +354,41 @@ pub async fn respond_to_request(
         send_image_payload_over_udp(&responder_socket, image_id, requested_views, buffer, peer_ip, peer_port)
             .await?;
         println!("Approved request for {} views", requested_views);
+        // Handle `sent_images_data.json`
+        let json_file_path = Path::new("../sent_images_data.json");
+
+        // Check if the file exists, create it if not
+        if !json_file_path.exists() {
+            println!("File {} does not exist. Creating a new one.", json_file_path.display());
+            fs::write(json_file_path, "{}").await?; // Write an empty JSON object
+        }
+
+        // Read the JSON file
+        let mut sent_images_data: Value = {
+            let json_content = fs::read_to_string(json_file_path).await?;
+            serde_json::from_str(&json_content).unwrap_or_else(|_| serde_json::json!({}))
+        };
+
+        // Update or create an entry for this client
+        let client_entry = sent_images_data
+            .get_mut(peer_client_id)
+            .and_then(|entry| entry.as_array_mut());
+
+        if let Some(images_list) = client_entry {
+            // Add the image ID to the existing client's list
+            images_list.push(Value::String(image_id.to_string()));
+        } else {
+            // Create a new entry for the client with the current image ID
+            sent_images_data[peer_client_id] = Value::Array(vec![Value::String(image_id.to_string())]);
+        }
+
+        // Save the updated JSON back to the file
+        let updated_json = serde_json::to_string_pretty(&sent_images_data)?;
+        fs::write(json_file_path, updated_json).await?;
+        println!(
+            "Updated sent_images_data.json with image ID '{}' for client '{}'",
+            image_id, peer_client_id
+        );
     } else {
         let response = json!({
             "type": "image_rejection",
@@ -615,6 +653,117 @@ pub async fn handle_increase_views_response(image_id: &str, extra_views: u32, ap
     } else {
         println!("Increase views request for image '{}' was rejected for {} views.", image_id, extra_views);
     }
+
+    Ok(())
+}
+
+
+
+pub async fn send_update_access_request(
+    socket: &UdpSocket,
+    peer_addr: &str,
+    image_id: &str,
+    view_delta: i32,
+) -> io::Result<()> {
+    let update_request = json!({
+        "type": "update_access_request",
+        "image_id": image_id,
+        "view_delta": view_delta,
+    });
+
+    socket.send_to(update_request.to_string().as_bytes(), peer_addr).await?;
+    println!("Sent update access request to {} for image {}: delta {}", peer_addr, image_id, view_delta);
+
+    // Wait for acknowledgment
+    let mut ack_buf = [0u8; 1024];
+    match timeout(Duration::from_secs(10), socket.recv_from(&mut ack_buf)).await {
+        Ok(Ok((size, _))) if size > 0 => {
+            let ack: serde_json::Value = serde_json::from_slice(&ack_buf[..size])?;
+            if ack.get("status") == Some(&serde_json::Value::String("success".to_string())) {
+                println!("Access update acknowledged successfully for image {}", image_id);
+            } else {
+                println!("Received acknowledgment but with errors: {:?}", ack);
+            }
+        }
+        _ => {
+            println!("Acknowledgment not received. Consider notifying the server.");
+        }
+    }
+
+    Ok(())
+}
+
+
+
+pub async fn handle_update_access_request(
+    socket: &UdpSocket,
+    request: serde_json::Value,
+    sender_addr: &str,
+) -> io::Result<()> {
+    let image_id = request.get("image_id").and_then(|id| id.as_str()).ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidData, "Missing or invalid image_id in request")
+    })?;
+    let view_delta = request.get("view_delta").and_then(|v| v.as_i64()).ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidData, "Missing or invalid view_delta in request")
+    })? as i32;
+
+    println!("Processing access update request for image {}: delta {}", image_id, view_delta);
+
+    // Load and decode the image
+    let image_path = Path::new("../Peer_Images").join(format!("{}_encrypted.png", image_id));
+    let encoded_image = image::open(&image_path).map_err(|err| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("Failed to open image at {:?}: {}", image_path, err),
+        )
+    })?;
+    let (current_views, decoded_image) = decode_access_rights(encoded_image).map_err(|err| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("Failed to decode access rights: {}", err),
+        )
+    })?;
+
+    // Update access rights
+    let new_views = if view_delta < 0 {
+        current_views.saturating_sub(view_delta.abs() as u16)
+    } else {
+        current_views.saturating_add(view_delta as u16)
+    };
+
+    // Encode the new access rights
+    let updated_image = crate::p2p::encode_access_rights(image_id, sender_addr, new_views)
+        .await
+        .map_err(|err| {
+            io::Error::new(
+                io::ErrorKind::Other,
+                format!("Failed to encode access rights: {}", err),
+            )
+        })?;
+
+    let mut output = Vec::new();
+    updated_image.write_to(&mut Cursor::new(&mut output), image::ImageOutputFormat::PNG).map_err(
+        |err| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("Failed to write updated image data: {}", err),
+            )
+        },
+    )?;
+
+    // Save the updated image
+    let updated_path = Path::new("../Peer_Images").join(format!("{}_encrypted_updated.png", image_id));
+    tokio::fs::write(&updated_path, &output).await?;
+    println!("Updated access rights for image {}: new views = {}", image_id, new_views);
+
+    // Send acknowledgment
+    let ack = json!({
+        "type": "update_access_ack",
+        "status": "success",
+        "image_id": image_id,
+        "new_views": new_views,
+    });
+    socket.send_to(ack.to_string().as_bytes(), sender_addr).await?;
 
     Ok(())
 }

@@ -44,101 +44,82 @@ async fn main() -> io::Result<()> {
     let p2p_socket_clone = Arc::clone(&p2p_socket);
 
     tokio::spawn({
-            async move {
-                let mut buffer = [0u8; 1024];
-                loop {
-                    if let Ok((size, src)) = p2p_socket_clone.recv_from(&mut buffer).await {
-                        let received_data = String::from_utf8_lossy(&buffer[..size]).to_string();
-                        println!("[P2P Listener] Received data: {} from {}", received_data, src);
-                        // Parse the payload to JSON
-                        let response_json = match serde_json::from_str::<serde_json::Value>(&received_data) {
-                            Ok(json) => json,
-                            Err(_) => {
-                                // Log and ignore non-JSON payloads
-                                eprintln!("[P2P Listener] Ignoring non-JSON payload: {}", received_data);
-                                continue;
-                            }
-                        };
-                        if let Ok(response_json) = serde_json::from_str::<serde_json::Value>(&received_data) {
-                            if let Some(response_type) = response_json.get("type").and_then(|t| t.as_str()) {
-                                match response_type {
-                                // *** Automatically handle "increase_approved" ***
-                                "increase_approved" => {
-                                    if let Some(image_id) = response_json.get("image_id").and_then(|id| id.as_str()) {
-                                        if let Some(additional_views) = response_json.get("views").and_then(|v| v.as_u64()) {
-                                            println!(
-                                                "[P2P Listener] Handling 'increase_approved' for image '{}' with {} additional views.",
-                                                image_id, additional_views
-                                            );
-                                            p2p::handle_increase_views_response(image_id, additional_views as u32, true).await;
-                                            
-                                            // Send acknowledgment
-                                            let ack_message = json!({
-                                                "type": "increase_approved_ack",
-                                                "status": "received",
-                                                "image_id": image_id
-                                            }).to_string();
-                                            if let Err(e) = p2p_socket_clone.send_to(ack_message.as_bytes(), src).await {
-                                                eprintln!("[P2P Listener] Failed to send acknowledgment: {}", e);
-                                            } else {
-                                                println!("[P2P Listener] Sent acknowledgment for 'increase_approved' to {}", src);
-                                            }
+        async move {
+            let mut buffer = [0u8; 1024];
+            loop {
+                if let Ok((size, src)) = p2p_socket_clone.recv_from(&mut buffer).await {
+                    let received_data = String::from_utf8_lossy(&buffer[..size]).to_string();
+                    println!("[P2P Listener] Received data: {} from {}", received_data, src);
+    
+                    // Parse the payload to JSON
+                    let response_json = match serde_json::from_str::<serde_json::Value>(&received_data) {
+                        Ok(json) => json,
+                        Err(_) => {
+                            // Log and ignore non-JSON payloads
+                            eprintln!("[P2P Listener] Ignoring non-JSON payload: {}", received_data);
+                            continue;
+                        }
+                    };
+    
+                    if let Some(response_type) = response_json.get("type").and_then(|t| t.as_str()) {
+                        match response_type {
+                            // Handle "increase_approved"
+                            "increase_approved" => {
+                                if let Some(image_id) = response_json.get("image_id").and_then(|id| id.as_str()) {
+                                    if let Some(additional_views) = response_json.get("views").and_then(|v| v.as_u64()) {
+                                        println!(
+                                            "[P2P Listener] Handling 'increase_approved' for image '{}' with {} additional views.",
+                                            image_id, additional_views
+                                        );
+                                        p2p::handle_increase_views_response(image_id, additional_views as u32, true).await;
+    
+                                        // Send acknowledgment
+                                        let ack_message = json!({
+                                            "type": "increase_approved_ack",
+                                            "status": "received",
+                                            "image_id": image_id
+                                        })
+                                        .to_string();
+                                        if let Err(e) = p2p_socket_clone.send_to(ack_message.as_bytes(), src).await {
+                                            eprintln!("[P2P Listener] Failed to send acknowledgment: {}", e);
                                         } else {
-                                            eprintln!("[P2P Listener] Missing or invalid 'views' in 'increase_approved' payload.");
+                                            println!("[P2P Listener] Sent acknowledgment for 'increase_approved' to {}", src);
                                         }
                                     } else {
-                                        eprintln!("[P2P Listener] Missing 'image_id' in 'increase_approved' payload.");
+                                        eprintln!("[P2P Listener] Missing or invalid 'views' in 'increase_approved' payload.");
                                     }
-                                }
-        
-                                // *** Automatically handle "increase_rejected" ***
-                                "increase_rejected" => {
-                                    if let Some(image_id) = response_json.get("image_id").and_then(|id| id.as_str()) {
-                                        if let Some(additional_views) = response_json.get("views").and_then(|v| v.as_u64()) {
-                                            println!(
-                                                "[P2P Listener] Handling 'increase_rejected' for image '{}' with {} additional views.",
-                                                image_id, additional_views
-                                            );
-                                            p2p::handle_increase_views_response(image_id, additional_views as u32, false).await;
-        
-                                            // Send acknowledgment
-                                            let ack_message = json!({
-                                                "type": "increase_rejected_ack",
-                                                "status": "received",
-                                                "image_id": image_id
-                                            }).to_string();
-                                            if let Err(e) = p2p_socket_clone.send_to(ack_message.as_bytes(), src).await {
-                                                eprintln!("[P2P Listener] Failed to send acknowledgment: {}", e);
-                                            } else {
-                                                println!("[P2P Listener] Sent acknowledgment for 'increase_rejected' to {}", src);
-                                            }
-                                        } else {
-                                            eprintln!("[P2P Listener] Missing or invalid 'views' in 'increase_rejected' payload.");
-                                        }
-                                    } else {
-                                        eprintln!("[P2P Listener] Missing 'image_id' in 'increase_rejected' payload.");
-                                    }
-                                }
-                                // *** Add other payloads to the queue ***
-                                _ => {
-                                    println!(
-                                        "[P2P Listener] Adding payload of type '{}' from {} to the queue.",
-                                        response_type, src
-                                    );
-                                    let mut queue = request_queue_clone.lock().await;
-                                    queue.push_back((src, received_data)); // Add the payload to the queue
+                                } else {
+                                    eprintln!("[P2P Listener] Missing 'image_id' in 'increase_approved' payload.");
                                 }
                             }
-                        } else {
-                            eprintln!("[P2P Listener] Malformed payload: Missing 'type' field.");
+    
+                            // Handle "update_access_request"
+                            "update_access_request" => {
+                                if let Err(e) = p2p::handle_update_access_request(&p2p_socket_clone, response_json, &src.to_string()).await {
+                                    eprintln!("Failed to handle update access request: {}", e);
+                                }
+                            }
+    
+                            // Handle unknown types by adding them to the request queue
+                            _ => {
+                                println!(
+                                    "[P2P Listener] Adding payload of type '{}' from {} to the queue.",
+                                    response_type, src
+                                );
+                                let mut queue = request_queue_clone.lock().await;
+                                queue.push_back((src, received_data));
+                            }
                         }
                     } else {
-                        eprintln!("[P2P Listener] Failed to parse received data as JSON: {}", received_data);
+                        eprintln!("[P2P Listener] Malformed payload: Missing 'type' field.");
                     }
+                } else {
+                    eprintln!("[P2P Listener] Failed to parse received data.");
                 }
             }
         }
     });
+    
     
     
 
@@ -278,7 +259,8 @@ async fn main() -> io::Result<()> {
                         println!("4. Increase Views of Image From Active User");
                         println!("5. View Client Requests");
                         println!("6. View Peer Images");
-                        println!("7. Shutdown");
+                        println!("7. Update Access Rights");
+                        println!("8. Shutdown");
                         print!("Enter your choice: ");
                         io::stdout().flush()?;
                         let mut menu_choice = String::new();
@@ -384,7 +366,20 @@ async fn main() -> io::Result<()> {
                                 }
                             }
                             "3" => {
-                                workflow::request_image(&socket, &config, &peer_channel).await?;
+                                let user_id: String = match fs::read_to_string("../user.json") {
+                                    Ok(contents) => {
+                                        let json: serde_json::Value = serde_json::from_str(&contents).unwrap_or_default();
+                                        json.get("user_id")
+                                            .and_then(|id| id.as_str()) // Convert to &str
+                                            .map(|id| id.to_string()) // Convert to String
+                                            .unwrap_or_else(|| "0".to_string()) // Fallback to "0" as a String
+                                    }
+                                    Err(_) => {
+                                        eprintln!("Failed to read user.json or user_id not found. Using default user_id = 0.");
+                                        "0".to_string() // Fallback to "0" as a String
+                                    }
+                                };
+                                workflow::request_image(&socket, &config, &peer_channel, user_id).await?;
                             }
                             "4" => {
                                 workflow::request_increase_image_views(&p2p_socket, &config).await?;
@@ -432,22 +427,30 @@ async fn main() -> io::Result<()> {
                                                                 "image_request" => {
                                                                     if let Some(image_id) = request_json.get("image_id").and_then(|id| id.as_str()) {
                                                                         if let Some(requested_views) = request_json.get("views").and_then(|v| v.as_u64()) {
-                                                                            let views = requested_views as u16;
-                                                                            println!("Processing 'image_request' for image_id: {}, views: {}", image_id, views);
-
-                                                                            // Call the appropriate function to handle the image request
-                                                                            if let Err(e) = p2p::respond_to_request(
-                                                                                &p2p_socket,
-                                                                                image_id,
-                                                                                views,
-                                                                                &src.to_string(),
-                                                                                true
-                                                                            )
-                                                                            .await
-                                                                            {
-                                                                                eprintln!("[Request Handler] Error responding to request: {}", e);
+                                                                            if let Some(requesting_client_id) = request_json.get("requesting_client_id").and_then(|id| id.as_str()) {
+                                                                                let views = requested_views as u16;
+                                                                                println!(
+                                                                                    "Processing 'image_request' for image_id: {}, views: {}, requested by: {}",
+                                                                                    image_id, views, requesting_client_id
+                                                                                );
+                                                    
+                                                                                // Call the updated respond_to_request function
+                                                                                if let Err(e) = p2p::respond_to_request(
+                                                                                    &p2p_socket,
+                                                                                    image_id,
+                                                                                    views,
+                                                                                    &src.to_string(),
+                                                                                    requesting_client_id,
+                                                                                    true
+                                                                                )
+                                                                                .await
+                                                                                {
+                                                                                    eprintln!("[Request Handler] Error responding to request: {}", e);
+                                                                                } else {
+                                                                                    println!("[Request Handler] Successfully handled 'image_request'.");
+                                                                                }
                                                                             } else {
-                                                                                println!("[Request Handler] Successfully handled 'image_request'.");
+                                                                                eprintln!("[Request Handler] Missing 'requesting_client_id' field in 'image_request'");
                                                                             }
                                                                         } else {
                                                                             eprintln!("[Request Handler] Missing or invalid 'views' field in 'image_request'");
@@ -455,7 +458,7 @@ async fn main() -> io::Result<()> {
                                                                     } else {
                                                                         eprintln!("[Request Handler] Missing 'image_id' field in 'image_request'");
                                                                     }
-                                                                }
+                                                                }                                                    
                                                                 "increase_views_request" => {
                                                                     if let Some(image_id) = request_json.get("image_id").and_then(|id| id.as_str()) {
                                                                         if let Some(requested_views) = request_json.get("views").and_then(|v| v.as_u64()) {
@@ -506,22 +509,30 @@ async fn main() -> io::Result<()> {
                                                                 "image_request" => {
                                                                     if let Some(image_id) = request_json.get("image_id").and_then(|id| id.as_str()) {
                                                                         if let Some(requested_views) = request_json.get("views").and_then(|v| v.as_u64()) {
-                                                                            let views = requested_views as u16;
-                                                                            println!("Processing 'image_request' for image_id: {}, views: {}", image_id, views);
+                                                                            if let Some(requesting_client_id) = request_json.get("requesting_client_id").and_then(|id| id.as_str()) {
+                                                                                let views = requested_views as u16;
+                                                                                println!(
+                                                                                    "Processing 'image_request' for image_id: {}, views: {}, requested by: {}",
+                                                                                    image_id, views, requesting_client_id
+                                                                                );
 
-                                                                            // Call the appropriate function to handle the image request
-                                                                            if let Err(e) = p2p::respond_to_request(
-                                                                                &p2p_socket,
-                                                                                image_id,
-                                                                                views,
-                                                                                &src.to_string(),
-                                                                                false
-                                                                            )
-                                                                            .await
-                                                                            {
-                                                                                eprintln!("[Request Handler] Error responding to request: {}", e);
+                                                                                // Call the updated respond_to_request function for rejection
+                                                                                if let Err(e) = p2p::respond_to_request(
+                                                                                    &p2p_socket,
+                                                                                    image_id,
+                                                                                    views,
+                                                                                    &src.to_string(),
+                                                                                    requesting_client_id,
+                                                                                    false, // Indicate rejection
+                                                                                )
+                                                                                .await
+                                                                                {
+                                                                                    eprintln!("[Request Handler] Error responding to request: {}", e);
+                                                                                } else {
+                                                                                    println!("[Request Handler] Successfully handled 'image_request'.");
+                                                                                }
                                                                             } else {
-                                                                                println!("[Request Handler] Successfully handled 'image_request'.");
+                                                                                eprintln!("[Request Handler] Missing 'requesting_client_id' field in 'image_request'");
                                                                             }
                                                                         } else {
                                                                             eprintln!("[Request Handler] Missing or invalid 'views' field in 'image_request'");
@@ -536,17 +547,17 @@ async fn main() -> io::Result<()> {
                                                                             let views = requested_views as u16;
                                                                             println!("Processing 'increase_views_request' for image_id: {}, views: {}", image_id, views);
 
-                                                                            // Call the appropriate function to handle the image request
+                                                                            // Call the appropriate function to handle the increase views request
                                                                             if let Err(e) = p2p::respond_to_increase_views(
                                                                                 &p2p_socket,
                                                                                 image_id,
                                                                                 views,
                                                                                 &src.to_string(),
-                                                                                false
+                                                                                false, // Indicate rejection
                                                                             )
                                                                             .await
                                                                             {
-                                                                                eprintln!("[Request Handler] Error responding to request: {}", e);
+                                                                                eprintln!("[Request Handler] Error responding to increase views request: {}", e);
                                                                             } else {
                                                                                 println!("[Request Handler] Successfully handled 'increase_views_request'.");
                                                                             }
@@ -680,8 +691,87 @@ async fn main() -> io::Result<()> {
                                 }  
                                 
                             }
-
                             "7" => {
+                                // Path to the JSON file
+                                let json_file_path = "../sent_images_data.json";
+
+                                // Check if the JSON file exists
+                                let sent_images_data: serde_json::Value = if Path::new(json_file_path).exists() {
+                                    // Read and parse the JSON file
+                                    match fs::read_to_string(json_file_path) {
+                                        Ok(contents) => serde_json::from_str(&contents).unwrap_or_else(|_| {
+                                            println!("Invalid JSON format in {}. Starting with an empty structure.", json_file_path);
+                                            serde_json::json!({})
+                                        }),
+                                        Err(_) => {
+                                            println!("Failed to read {}. Starting with an empty structure.", json_file_path);
+                                            serde_json::json!({})
+                                        }
+                                    }
+                                } else {
+                                    println!("No previous records found. Ensure the JSON file exists or start by approving some requests.");
+                                    continue;
+                                };
+
+                                // Display the clients and their sent images
+                                println!("Clients and their sent images:");
+                                if let Some(data_map) = sent_images_data.as_object() {
+                                    let mut client_list: Vec<(String, Vec<String>)> = vec![];
+
+                                    for (client_id, images) in data_map {
+                                        if let Some(images_array) = images.as_array() {
+                                            let image_ids: Vec<String> = images_array
+                                                .iter()
+                                                .filter_map(|image| image.as_str().map(|s| s.to_string()))
+                                                .collect();
+                                            client_list.push((client_id.clone(), image_ids));
+                                        }
+                                    }
+
+                                    // Display the clients and their images
+                                    for (index, (client_id, images)) in client_list.iter().enumerate() {
+                                        println!("{}: Client ID: {} - Images: {:?}", index + 1, client_id, images);
+                                    }
+
+                                    println!("Enter the number of the client to update access rights:");
+                                    let mut input = String::new();
+                                    io::stdin().read_line(&mut input)?;
+                                    let client_index = input.trim().parse::<usize>().unwrap_or(0) - 1;
+
+                                    if client_index >= client_list.len() {
+                                        println!("Invalid selection.");
+                                        continue;
+                                    }
+
+                                    let (client_id, images) = &client_list[client_index];
+
+                                    println!("Available images from Client ID {}: {:?}", client_id, images);
+
+                                    println!("Enter the image ID to update access rights:");
+                                    let mut image_input = String::new(); // Create a new variable
+                                    io::stdin().read_line(&mut image_input)?;
+                                    let image_id = image_input.trim(); // Use the new variable here
+
+                                    if !images.contains(&image_id.to_string()) {
+                                        println!("Invalid image ID for the selected client.");
+                                        continue;
+                                    }
+
+                                    println!("Enter the number of views to add/remove (negative to remove):");
+                                    let mut delta_input = String::new(); // Another new variable
+                                    io::stdin().read_line(&mut delta_input)?;
+                                    let view_delta = delta_input.trim().parse::<i32>().unwrap_or(0);
+
+                                    // Send the update access request
+                                    if let Err(e) = p2p::send_update_access_request(&p2p_socket, client_id, image_id, view_delta).await {
+                                        eprintln!("Failed to send update access request: {}", e);
+                                    }
+                                } else {
+                                    println!("No valid client data found in {}.", json_file_path);
+                                }
+                            }
+
+                            "8" => {
                                 // Generate a random seed for the RNG
                                 let seed: [u8; 32] = [0; 32];
                                 let mut rng = StdRng::from_seed(seed);
