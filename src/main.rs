@@ -189,12 +189,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let response = sign_in_user(&mut dos_conn, &client_id, &combined_socket_str);
 
                     // name json that has the images and the views the user receveid while he is offlice 
-                    let offline_requests = get_resources_by_client_id(&mut dos_conn, client_id);
+                    // let offline_requests = get_resources_by_client_id(&mut dos_conn, client_id);
 
                     let mut response_bytes = serde_json::to_vec(&response).unwrap();
-                    if response["status"] == "success"{
-                        response_bytes = serde_json::to_vec(&offline_requests).unwrap();
-                    }
+                    // if response["status"] == "success"{
+                    //     response_bytes = serde_json::to_vec(&offline_requests).unwrap();
+                    // }
 
                     if let Err(e) = async {
                         listen_socket_clone
