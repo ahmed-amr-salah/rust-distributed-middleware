@@ -38,9 +38,9 @@ const HEARTBEAT_PERIOD: u64 = 2;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Server settings
-    let local_addr: SocketAddr = "10.7.16.48:8081".parse().unwrap();
+    let local_addr: SocketAddr = "10.7.18.23:8081".parse().unwrap();
     let peer_addresses = vec![
-        // "10.40.51.73:8085".parse().unwrap(),
+        // "10.7.19.117:8085".parse().unwrap(),
         // "10.7.19.18:8085".parse().unwrap(),
     ];
 
@@ -111,9 +111,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
 
         let json = String::from_utf8_lossy(&buffer[..size]).to_string();
-        if json.contains("randam_number"){
+        if json.contains("random_number"){
             let parsed_json: serde_json::Value = serde_json::from_str(&json).unwrap();
-            let random_number = parsed_json["randam_number"].as_i64().unwrap();
+            let random_number = parsed_json["random_number"].as_i64().unwrap();
             request_id = format!("{}{}", request_id, random_number);
             println!("Received random number: {}", random_number);
             println!("Concatenated Result: {}", request_id);
@@ -320,9 +320,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if viewer_IP.is_empty() {
                         println!("Warning: peer_address is missing in the request.");
                     }
+                    else {println!("Viewer IP: {}", viewer_IP)};
                     if image_id.is_empty() {
                         println!("Warning: image_id is missing in the request.");
                     }
+                    else {println!("Image ID: {}", image_id)};
+
                     if views == 0 {
                         println!("Warning: requested_views is 0 or missing in the request.");
                     }
@@ -382,13 +385,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("Allocated port {} for client {}", client_port, client_addr);
                     
                     // Coordinator handles the client by invoking `handle_client`
-                    if let Err(e) = communication::handle_client(client_socket_clone, client_addr).await {
-                        eprintln!("Error handling client {}: {}", client_addr, e);
+                    match communication::handle_client(client_socket_clone, client_addr).await {
+                        Ok(_) => {
+                            // Only add the client resource to the dos if no error occurred
+                            let mut dos_conn = conn_clone.lock().await;
+                            insert_into_resources(&mut dos_conn, client_id, &image_id);
+                        }
+                        Err(e) => {
+                            // Log the error if `handle_client` fails
+                            eprintln!("Error handling client {}: {}", client_addr, e);
+                        }
                     }
-
-                    // Adding the client resource to the dos
-                    let mut dos_conn = conn_clone.lock().await;
-                    insert_into_resources(&mut dos_conn, client_id, &image_id);
                 }
 
                 

@@ -224,18 +224,30 @@ pub fn get_resources_by_client_id(conn: &mut PooledConn, client_id: u64) -> Valu
     // Step 1: Prepare the SQL query to fetch the data
     let query = "SELECT image_id, number_views FROM access_rights WHERE client_id = :client_id";
 
-    // Step 2: Execute the query and collect the results
-    match conn.exec_iter(query, params! { "client_id" => client_id }) {
-        Ok(result) => {
+    // Step 2: Fetch all rows into a vector
+    match conn.exec_map(
+        query,
+        params! { "client_id" => client_id },
+        |(image_id, number_views): (String, i32)| (image_id, number_views),
+    ) {
+        Ok(rows) => {
             let mut resources = Vec::new();
 
-            for row in result {
-                // Parse each row into a tuple of (image_id, number_views)
-                let (image_id, number_views): (String, i32) = mysql::from_row(row.unwrap());
+            // Process each row
+            for (image_id, number_views) in rows {
                 resources.push(json!({
                     "image_id": image_id,
                     "number_views": number_views,
                 }));
+
+                // Delete the entry from the database
+                let delete_query = "DELETE FROM access_rights WHERE client_id = :client_id AND image_id = :image_id";
+                if let Err(delete_error) = conn.exec_drop(delete_query, params! {
+                    "client_id" => client_id,
+                    "image_id" => image_id,
+                }) {
+                    eprintln!("Failed to delete entry: {}", delete_error);
+                }
             }
 
             // Return the results as JSON
@@ -254,3 +266,5 @@ pub fn get_resources_by_client_id(conn: &mut PooledConn, client_id: u64) -> Valu
         }
     }
 }
+
+
