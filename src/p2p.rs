@@ -618,3 +618,42 @@ pub async fn handle_increase_views_response(image_id: &str, extra_views: u32, ap
 
     Ok(())
 }
+
+
+pub async fn handle_update_access_rights(
+    image_id: &str,
+    extra_views: u32,
+) -> Result<(), Box<dyn Error>> {
+    // Path to the JSON file storing the views
+    let json_file_path = Path::new("../Peer_Images/images_views.json");
+
+    //erroneus
+    let mut views_data: Value = if json_file_path.exists() {
+        let file_content = fs::read_to_string(json_file_path).await?;
+        serde_json::from_str(&file_content)?
+    } else {
+        // Create a new JSON object if the file doesn't exist
+        Value::Object(serde_json::Map::new())
+    };
+
+    // Get the current views for the given image ID
+    let current_views = views_data
+    .get(image_id)
+    .and_then(|v| v.as_u64())
+    .unwrap_or(0);
+
+    // Calculate the new views
+    let new_views = current_views + extra_views as u64;
+
+    // Update the JSON with the new views
+    if let Value::Object(map) = &mut views_data {
+        map.insert(image_id.to_string(), Value::Number(new_views.into()));
+    }
+
+    // Write the updated JSON back to the file
+    let mut file = fs::File::create(json_file_path).await?;
+    file.write_all(serde_json::to_string_pretty(&views_data)?.as_bytes()).await?;
+    println!("Successfully updated views for image '{}'. New views count: {}", image_id, new_views);
+
+    Ok(())
+}

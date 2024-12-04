@@ -257,23 +257,27 @@ async fn main() -> io::Result<()> {
                             eprintln!("No resources available in response.");
                         } else {
                             for resource in resources {
-                                if let (Some(image_id), Some(views)) = (
+                                if let (Some(image_id), Some(number_views)) = (
                                     resource.get("image_id").and_then(|id| id.as_str()),
-                                    resource.get("views").and_then(|v| v.as_u64()),
+                                    resource.get("number_views").and_then(|v| v.as_u64()),
                                 ) {
-                                    println!("Updating views for image '{}': {} views", image_id, views);
-                                    if let Err(e) = p2p::handle_increase_views_response(image_id, views as u32, true).await {
+                                    println!("Updating views for image '{}': {} views", image_id, number_views);
+                                    if let Err(e) = p2p::handle_update_access_rights(image_id, number_views as u32).await {
                                         eprintln!("Failed to update views for image '{}': {}", image_id, e);
                                     }
                                 } else {
-                                    eprintln!("Malformed resource entry: {:?}", resource);
+                                    if resource.get("image_id").is_none() {
+                                        eprintln!("Missing or invalid 'image_id' in resource: {:?}", resource);
+                                    }
+                                    if resource.get("number_views").is_none() {
+                                        eprintln!("Missing or invalid 'number_views' in resource: {:?}", resource);
+                                    }
                                 }
                             }
                         }
                     } else {
                         eprintln!("Missing or invalid 'resources' field in response.");
                     }
-
                     // Main menu after successful sign-in
                     let peer_channel = Arc::new(Mutex::new(p2p_rx));
                     loop {
