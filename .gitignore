@@ -15,7 +15,6 @@
 *.iml
 
 # ignore Encryption-images dir
-Encryption-images/
 
 images/
 # Ignore the output of `cargo doc`, if you run `cargo doc --no-deps`
