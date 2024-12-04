@@ -529,24 +529,24 @@ pub async fn store_received_image(
     })
     .await??;
 
-    // Decode the hidden image from the first-layer image
-    let hidden_file_path = dir.join(format!(".{}.png", image_id));
-    tokio::task::spawn_blocking({
-        let first_layer_file_path = first_layer_file_path.clone(); // Clone to avoid move issues
-        let hidden_file_path = hidden_file_path.clone();           // Clone to avoid move issues
-        move || {
-            decode::decode_image(
-                first_layer_file_path.to_str().unwrap(),
-                hidden_file_path.to_str().unwrap(),
-            )
-        }
-    })
-    .await?;
+    // // Decode the hidden image from the first-layer image
+    // let hidden_file_path = dir.join(format!(".{}.png", image_id));
+    // tokio::task::spawn_blocking({
+    //     let first_layer_file_path = first_layer_file_path.clone(); // Clone to avoid move issues
+    //     let hidden_file_path = hidden_file_path.clone();           // Clone to avoid move issues
+    //     move || {
+    //         decode::decode_image(
+    //             first_layer_file_path.to_str().unwrap(),
+    //             hidden_file_path.to_str().unwrap(),
+    //         )
+    //     }
+    // })
+    // .await?;
 
-    println!(
-        "Hidden image successfully extracted and saved at: {}",
-        hidden_file_path.display()
-    );
+    // println!(
+    //     "Hidden image successfully extracted and saved at: {}",
+    //     hidden_file_path.display()
+    // );
 
     // Update the JSON file with the image_id and its views
     let json_file_path = dir.join("images_views.json");

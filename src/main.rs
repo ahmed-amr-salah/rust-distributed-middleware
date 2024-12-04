@@ -12,7 +12,7 @@ use std::collections::VecDeque;
 use rand::{Rng, SeedableRng};
 use rand::rngs::StdRng;
 mod open_image; // Add this at the top of main.rs
-use open_image::open_image_with_default_viewer;
+use open_image::{open_image_with_default_viewer, create_temp_hidden_file};
 
 
 mod authentication;
@@ -620,34 +620,61 @@ async fn main() -> io::Result<()> {
                                 println!("Enter the Image ID you want to view:");
                                 let mut selected_image_id = String::new();
                                 io::stdin().read_line(&mut selected_image_id).expect("Failed to read input");
-                                let selected_image_id = selected_image_id.trim();
+                                let selected_image_id = selected_image_id.trim().to_string();
 
                                 // Step 4: Validate the selection
-                                if let Some(remaining_views) = image_views.get_mut(selected_image_id) {
+                                if let Some(remaining_views) = image_views.get_mut(&selected_image_id) {
                                     let remaining_views = remaining_views.as_u64().expect("Invalid view count");
                                     
                                         // Step 5: Construct the path to the image
-                                        let image_path = format!("{}/.{}.png", images_folder, selected_image_id);
+                                        let enc_img_path = format!("{}/{}_first_layer.png", images_folder, selected_image_id);
                                     if remaining_views > 0 {
                                         // Check if the image exists
-                                        if !Path::new(&image_path).exists() {
-                                            println!("Image file not found: {}", image_path);
+                                        if !Path::new(&enc_img_path).exists() {
+                                            println!("Image file not found: {}", enc_img_path);
                                             return Ok(());
                                         }
 
-                                        // Step 6: Open the image using the system's default viewer
-                                        println!("Image Path is {}", image_path);
-                                        if let Err(e) = open_image_with_default_viewer(&image_path).await {
-                                            eprintln!("Error: {}", e);
+                                        // DECODING
+                                        match create_temp_hidden_file(selected_image_id.clone()) {
+                                            Ok(hidden_file_path) => {
+                                                println!("Temporary hidden file path: {:?}", hidden_file_path);
+                                                tokio::task::spawn_blocking({
+                                                    let enc_img_path = enc_img_path.clone();
+                                                    let hidden_file_path = hidden_file_path.clone();           // Clone to avoid move issues
+                                                    move || {
+                                                        decode::decode_image(
+                                                            enc_img_path.as_str(),
+                                                            hidden_file_path.as_os_str().to_string_lossy().as_ref(),
+                                                        )
+                                                    }
+                                                })
+                                                .await?;
+
+                                                println!(
+                                                    "Hidden image successfully extracted and saved at: {}",
+                                                    hidden_file_path.display()
+                                                );
+        
+                                                // Step 6: Open the image using the system's default viewer
+                                                println!("Image Path is {}", hidden_file_path.display());
+                                                if let Err(e) = open_image_with_default_viewer(hidden_file_path.as_os_str().to_string_lossy().as_ref()).await {
+                                                    eprintln!("Error: {}", e);
+                                                }
+                                                // Step 7: Decrement the view count
+                                            
+                                                *image_views.get_mut(&selected_image_id).unwrap() = Value::from(remaining_views - 1);
+                                                println!(
+                                                    "Remaining views for image {}: {}",
+                                                    selected_image_id,
+                                                    remaining_views - 1
+                                                );
+                                            }
+                                            Err(e) => {
+                                                eprintln!("Error creating temporary file: {}", e);
+                                            }
                                         }
-                                        // Step 7: Decrement the view count
-                                    
-                                        *image_views.get_mut(selected_image_id).unwrap() = Value::from(remaining_views - 1);
-                                        println!(
-                                            "Remaining views for image {}: {}",
-                                            selected_image_id,
-                                            remaining_views - 1
-                                        );
+                      
                                     } else {
                                         println!("Ran out of viewing rights");
 

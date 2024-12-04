@@ -2,7 +2,8 @@ use std::process::Command;
 use std::error::Error;
 use show_image::{create_window, ImageInfo, ImageView};
 use image::{open, ImageBuffer, Rgb};
-
+use tempfile::TempDir;
+use std::path::PathBuf;
 
 pub async fn open_image_with_default_viewer(image_path: &str) -> Result<(), Box<dyn Error>> {
     // Step 1: Open the image
@@ -24,4 +25,15 @@ pub async fn open_image_with_default_viewer(image_path: &str) -> Result<(), Box<
     // Step 5: Wait until the window is closed
     window.wait_until_destroyed()?;
     Ok(())
+}
+
+pub fn create_temp_hidden_file(image_id: String) -> std::io::Result<PathBuf> {
+    // Create a temporary directory
+    let temp_dir = TempDir::new()?;
+
+    // Construct the hidden file path in the temporary directory
+    let hidden_file_path = temp_dir.path().join(format!(".{}.png", image_id));
+
+    // Return the path to the hidden file
+    Ok(hidden_file_path)
 }
