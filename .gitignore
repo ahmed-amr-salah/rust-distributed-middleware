@@ -25,5 +25,8 @@ received_images/
 
 Images_dir/
 
+# ignore Peer images
+Peer_Images/
+
 # ignore user.josn file
 user.json
