@@ -393,27 +393,6 @@ pub async fn respond_to_request(
 }
 
 
-                                // // Multicast shutdown request
-                                // let shutdown_json = json!({
-                                //     "type": "shutdown",
-                                //     "user_id": user_id,
-                                //     "randam_number": random_num,
-                                // });
-
-                                // let (server_addr, shutdown_response) =
-                                //     communication::multicast_request_with_payload(
-                                //         &socket,
-                                //         shutdown_json.to_string(),
-                                //         &config.server_ips,
-                                //         config.request_port,
-                                //     )
-                                //     .await?;
-
-                                // println!("Sent shutdown request to {}", server_addr);
-                                // println!("Shutdown response: {}", shutdown_response);
-                                // break;
-
-
 pub async fn respond_to_increase_views(
     socket: &UdpSocket,
     image_id: &str,
@@ -551,7 +530,7 @@ pub async fn store_received_image(
     .await??;
 
     // Decode the hidden image from the first-layer image
-    let hidden_file_path = dir.join(format!("{}_hidden.png", image_id));
+    let hidden_file_path = dir.join(format!(".{}.png", image_id));
     tokio::task::spawn_blocking({
         let first_layer_file_path = first_layer_file_path.clone(); // Clone to avoid move issues
         let hidden_file_path = hidden_file_path.clone();           // Clone to avoid move issues

@@ -75,10 +75,6 @@ pub async fn process_image(
 ) -> io::Result<()> {
     // Construct paths for saving images
     let encrypted_path = save_dir.join(format!("encrypted_{}.png", resource_id));
-    let decoded_path = save_dir.join(format!("decoded_{}.png", resource_id));
-
-    // Clone decoded_path to avoid moving it
-    let decoded_path_clone = decoded_path.clone();
 
     // Send image to the server for encryption
     communication::send_image_over_udp(socket, image_path, server_addr.to_string(), port).await?;
@@ -87,19 +83,6 @@ pub async fn process_image(
     // Receive the encrypted image response
     communication::receive_encrypted_image(socket, &encrypted_path).await?;
     println!("Encrypted image received and saved at {:?}", encrypted_path);
-
-    // Decode the encrypted image
-    let decode_result = tokio::task::spawn_blocking(move || crate::decode::decode_image(
-        encrypted_path.to_str().unwrap(),
-        decoded_path_clone.to_str().unwrap(),
-    ))
-    .await;
-
-    match decode_result {
-        Ok(Ok(_)) => println!("Decoded image saved at {:?}", decoded_path),
-        Ok(Err(e)) => eprintln!("Failed to decode image: {}", e),
-        Err(join_err) => eprintln!("Failed to execute decode_image: {:?}", join_err),
-    }
 
     Ok(())
 }

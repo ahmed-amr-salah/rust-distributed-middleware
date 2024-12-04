@@ -1,15 +1,19 @@
-use std::io::{self, Write};
+use std::io::{self, Write, Read};
 use std::path::Path;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
-use serde_json::json;
+use serde_json::{json, Value, Map};
 use uuid::Uuid;
 use std::fs;
+use std::fs::File;
 use std::collections::VecDeque;
 use rand::{Rng, SeedableRng};
 use rand::rngs::StdRng;
+mod open_image; // Add this at the top of main.rs
+use open_image::open_image_with_default_viewer;
+
 
 mod authentication;
 mod communication;
@@ -22,6 +26,7 @@ mod p2p;
 
 
 #[tokio::main]
+#[show_image::main]
 async fn main() -> io::Result<()> {
     // Load environment variables and configuration
     let config = config::load_config();
@@ -158,7 +163,7 @@ async fn main() -> io::Result<()> {
                 // Create the registration JSON payload
                 let register_json = json!({
                     "type": "register",
-                    "randam_number": random_num,
+                    "random_number": random_num,
                 });
 
                 // Multicast registration request with the JSON payload
@@ -222,7 +227,7 @@ async fn main() -> io::Result<()> {
                     "type": "sign_in",
                     "user_id": user_id,
                     "p2p_socket": p2p_formatted_socket,
-                    "randam_number": random_num,
+                    "random_number": random_num,
                 });
 
                 // Multicast sign-in request
@@ -272,7 +277,8 @@ async fn main() -> io::Result<()> {
                         println!("3. Request Image From Active User");
                         println!("4. Increase Views of Image From Active User");
                         println!("5. View Client Requests");
-                        println!("6. Shutdown");
+                        println!("6. View Peer Images");
+                        println!("7. Shutdown");
                         print!("Enter your choice: ");
                         io::stdout().flush()?;
                         let mut menu_choice = String::new();
@@ -575,8 +581,107 @@ async fn main() -> io::Result<()> {
                                         _ => println!("Invalid selection. Please enter a valid number."),
                                     }
                                 }
-                            } 
+                            }
+
                             "6" => {
+                                // Generate a random seed for the RNG
+                                let seed: [u8; 32] = [0; 32];
+                                let mut rng = StdRng::from_seed(seed);
+                                let random_num: i32 = rng.gen();
+                                 
+                                //Viewing Images we have access to
+                                //PseudoCode
+                                // retrieve images_views.json file and display to user and wait for 
+                                // user to choose image_id
+                                //retrive {image_id}.png from received_images and show it in a pop up widow
+                                //decrement the value corresponding to the image_id to image_views.json
+                                //if the value is zero we will delete {image_id}.png
+                                //and delete the entry for this image id in image_views.json
+                                //and print that we ran out of viewing rights
+                                
+                                let json_image_views_path = "../Peer_Images/images_views.json";
+                                let images_folder = "../Peer_Images";
+                                
+                                let mut file = File::open(json_image_views_path).expect("Failed to open images_views.json");
+                                let mut contents = String::new();
+                                file.read_to_string(&mut contents).expect("Failed to read images_views.json");
+
+                                // Parse JSON
+                                let mut image_views: Map<String, Value> = serde_json::from_str(&contents)
+                                    .expect("Invalid JSON format in images_views.json");
+
+                                // Step 2: Display available image IDs and view counts
+                                println!("Available Images:");
+                                for (image_id, count) in &image_views{
+                                    println!("{} -> Remaining Views: {}", image_id, count.as_u64().unwrap_or(0));
+                                }
+
+                                // Step 3: Prompt the user to select an image ID
+                                println!("Enter the Image ID you want to view:");
+                                let mut selected_image_id = String::new();
+                                io::stdin().read_line(&mut selected_image_id).expect("Failed to read input");
+                                let selected_image_id = selected_image_id.trim();
+
+                                // Step 4: Validate the selection
+                                if let Some(remaining_views) = image_views.get_mut(selected_image_id) {
+                                    let remaining_views = remaining_views.as_u64().expect("Invalid view count");
+                                    
+                                        // Step 5: Construct the path to the image
+                                        let image_path = format!("{}/.{}.png", images_folder, selected_image_id);
+                                    if remaining_views > 0 {
+                                        // Check if the image exists
+                                        if !Path::new(&image_path).exists() {
+                                            println!("Image file not found: {}", image_path);
+                                            return Ok(());
+                                        }
+
+                                        // Step 6: Open the image using the system's default viewer
+                                        println!("Image Path is {}", image_path);
+                                        if let Err(e) = open_image_with_default_viewer(&image_path).await {
+                                            eprintln!("Error: {}", e);
+                                        }
+                                        // Step 7: Decrement the view count
+                                    
+                                        *image_views.get_mut(selected_image_id).unwrap() = Value::from(remaining_views - 1);
+                                        println!(
+                                            "Remaining views for image {}: {}",
+                                            selected_image_id,
+                                            remaining_views - 1
+                                        );
+                                    } else {
+                                        println!("Ran out of viewing rights");
+
+                                        // Construct the path to the encrypted image
+                                        let encrypted_image_path = format!("{}/{}_encrypted.png", images_folder, selected_image_id);
+
+                                        // Check if the encrypted image exists
+                                        if !Path::new(&encrypted_image_path).exists() {
+                                            println!("Encrypted image file not found: {}", encrypted_image_path);
+                                            return Ok(());
+                                        }
+
+                                        // Open the encrypted image using the system's default viewer
+                                        println!("Displaying encrypted image: {}", encrypted_image_path);
+                                        if let Err(e) = open_image_with_default_viewer(&encrypted_image_path).await {
+                                            eprintln!("Error: {}", e);
+                                        }
+
+                                    }
+
+                                    // Step 8: Save the updated JSON
+                                    let mut file = File::create(json_image_views_path).expect("Failed to create images_views.json");
+                                    let updated_json = serde_json::to_string_pretty(&Value::Object(image_views))
+                                        .expect("Failed to serialize updated JSON");
+                                    file.write_all(updated_json.as_bytes())
+                                        .expect("Failed to write to images_views.json");
+
+                                } else {
+                                    println!("Invalid Image ID: {}", selected_image_id);
+                                }  
+                                
+                            }
+
+                            "7" => {
                                 // Generate a random seed for the RNG
                                 let seed: [u8; 32] = [0; 32];
                                 let mut rng = StdRng::from_seed(seed);
@@ -586,7 +691,7 @@ async fn main() -> io::Result<()> {
                                 let shutdown_json = json!({
                                     "type": "shutdown",
                                     "user_id": user_id,
-                                    "randam_number": random_num,
+                                    "random_number": random_num,
                                 });
 
                                 let (server_addr, shutdown_response) =
