@@ -11,6 +11,7 @@ use std::fs::File;
 use std::collections::VecDeque;
 use rand::{Rng, SeedableRng};
 use rand::rngs::StdRng;
+use rand::rngs::ThreadRng;
 use tempfile::TempDir;
 mod open_image; // Add this at the top of main.rs
 use open_image::open_image_with_default_viewer;
@@ -158,8 +159,10 @@ async fn main() -> io::Result<()> {
         match choice {
             "1" => {
                 // Generate a random seed for the RNG
-                let seed: [u8; 32] = [0; 32];
-                let mut rng = StdRng::from_seed(seed);
+                // let seed: [u8; 32] = [0; 32];
+                // let mut rng = StdRng::from_seed(seed);
+                // let random_num: i32 = rng.gen();
+                let mut rng = rand::thread_rng(); // This automatically uses a dynamic seed
                 let random_num: i32 = rng.gen();
                 // Create the registration JSON payload
                 let register_json = json!({
@@ -191,8 +194,10 @@ async fn main() -> io::Result<()> {
             }
             "2" => {
                 // Generate a random seed for the RNG
-                let seed: [u8; 32] = [0; 32];
-                let mut rng = StdRng::from_seed(seed);
+                // let seed: [u8; 32] = [0; 32];
+                // let mut rng = StdRng::from_seed(seed);
+                // let random_num: i32 = rng.gen();
+                let mut rng = rand::thread_rng(); // This automatically uses a dynamic seed
                 let random_num: i32 = rng.gen();
                 // start the logic 
                 print!("Enter your user ID: ");
@@ -289,9 +294,11 @@ async fn main() -> io::Result<()> {
                         match menu_choice {
                             "1" => {
                                 // generate random seed for the RNG
-                                let seed: [u8; 32] = [0; 32];
-                                let mut rng = StdRng::from_seed(seed);
-                                let mut random_num: i32 = rng.gen();
+                                // let seed: [u8; 32] = [0; 32];
+                                // let mut rng = StdRng::from_seed(seed);
+                                // let mut random_num: i32 = rng.gen();
+                                let mut rng = rand::thread_rng(); // This automatically uses a dynamic seed
+                                let random_num: i32 = rng.gen();
 
                                 // User input: image path and resource ID
                                 let mut input = String::new();
@@ -586,8 +593,10 @@ async fn main() -> io::Result<()> {
 
                             "6" => {
                                 // Generate a random seed for the RNG
-                                let seed: [u8; 32] = [0; 32];
-                                let mut rng = StdRng::from_seed(seed);
+                                // let seed: [u8; 32] = [0; 32];
+                                // let mut rng = StdRng::from_seed(seed);
+                                // let random_num: i32 = rng.gen();
+                                let mut rng = rand::thread_rng(); // This automatically uses a dynamic seed
                                 let random_num: i32 = rng.gen();
                                  
                                 //Viewing Images we have access to
@@ -742,8 +751,10 @@ async fn main() -> io::Result<()> {
 
                             "7" => {
                                 // Generate a random seed for the RNG
-                                let seed: [u8; 32] = [0; 32];
-                                let mut rng = StdRng::from_seed(seed);
+                                // let seed: [u8; 32] = [0; 32];
+                                // let mut rng = StdRng::from_seed(seed);
+                                // let random_num: i32 = rng.gen();
+                                let mut rng = rand::thread_rng(); // This automatically uses a dynamic seed
                                 let random_num: i32 = rng.gen();
                                  
                                 // Multicast shutdown request

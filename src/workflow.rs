@@ -13,6 +13,7 @@ use tokio::fs;
 use std::collections::HashMap;
 
 use rand::{Rng, SeedableRng};
+use rand::rngs::ThreadRng;
 use rand::rngs::StdRng;
 
 
@@ -108,9 +109,11 @@ pub async fn get_active_users(
     config: &Config,
 ) -> io::Result<Vec<(String, Vec<String>)>> {
     // generate random number
-    let seed: [u8; 32] = [0; 32];
-    let mut rng = StdRng::from_seed(seed);
-    let mut random_num: i32 = rng.gen();
+    // let seed: [u8; 32] = [0; 32];
+    // let mut rng = StdRng::from_seed(seed);
+    // let mut random_num: i32 = rng.gen();
+    let mut rng = rand::thread_rng(); // This automatically uses a dynamic seed
+    let random_num: i32 = rng.gen();
 
     // Load user_id from the user.json file
     let user_id = match fs::read_to_string("../user.json").await{
