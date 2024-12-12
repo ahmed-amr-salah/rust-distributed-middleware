@@ -86,10 +86,6 @@ async fn main() -> io::Result<()> {
                     return; // Exit early if binding fails
                 }
             };
-            // let socket = Arc::new(UdpSocket::bind("0.0.0.0:0").await?); // Wrap in Arc
-            // let socket = Arc::new(Mutex::new(UdpSocket::bind("0.0.0.0:0").await));
-            // let socket_ref = socket.lock().await; // Lock the Mutex
-
 
             // Extract the image file name (without extension) as the resource ID
             let resource_name = image_path.file_stem()
@@ -104,7 +100,9 @@ async fn main() -> io::Result<()> {
                         .and_then(|id| id.as_str()) // Convert to &str
                         .map(|id| id.to_string()) // Convert to String
                         .unwrap_or_else(|| "0".to_string()) // Fallback to "0" as a String
-                }
+                }            // let socket = Arc::new(UdpSocket::bind("0.0.0.0:0").await?); // Wrap in Arc
+            // let socket = Arc::new(Mutex::new(UdpSocket::bind("0.0.0.0:0").await));
+            // let socket_ref = socket.lock().await; // Lock the Mutex
                 Err(_) => {
                     eprintln!("Failed to read user.json or user_id not found. Using default user_id = 0.");
                     "0".to_string() // Fallback to "0" as a String
@@ -154,7 +152,9 @@ async fn main() -> io::Result<()> {
                 eprintln!("No server responded to the resource ID. Exiting.");
             }
 
-            // Wait for 5 seconds after processing the image
+            // Wait for 5 seconds after processi            // let socket = Arc::new(UdpSocket::bind("0.0.0.0:0").await?); // Wrap in Arc
+            // let socket = Arc::new(Mutex::new(UdpSocket::bind("0.0.0.0:0").await));
+            // let socket_ref = socket.lock().await; // Lock the Mutexng the image
         });
         handles.push(handle);
     }
