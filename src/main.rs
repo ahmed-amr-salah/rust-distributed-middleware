@@ -38,19 +38,11 @@ const HEARTBEAT_PERIOD: u64 = 2;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Server settings
-    let local_addr: SocketAddr = "10.7.19.117:8081".parse().unwrap();
+    let local_addr: SocketAddr = "10.7.17.229:8081".parse().unwrap();
     let peer_addresses = vec![
         // "10.7.19.117:8085".parse().unwrap(),
         // "10.7.19.18:8085".parse().unwrap(),
     ];
-
-    // Connect to the database
-    dotenv().ok();
-    let db_url = env::var("db_url").expect("DATABASE_URL must be set");
-    let pool = Pool::new(db_url.as_str())?;
-    let mut conn = pool.get_conn()?;
-    let conn = Arc::new(Mutex::new(conn));
-    println!("Connected to the DoS successfully");
 
     let stats = Arc::new(Mutex::new(ServerStats {
         self_addr: local_addr,
@@ -102,305 +94,59 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         
         println!("Received request from client ---------------------> {}", client_addr);
-        
-        let mut request_id = format!(
-            "{}-{}-{:x}", 
-            client_addr.ip(),
-            client_addr.port(),
-            md5::compute(&buffer[..size]) // Ensure request ID is unique
-        );
 
         let json = String::from_utf8_lossy(&buffer[..size]).to_string();
-        if json.contains("random_number"){
-            let parsed_json: serde_json::Value = serde_json::from_str(&json).unwrap();
-            let random_number = parsed_json["random_number"].as_i64().unwrap();
-            request_id = format!("{}{}", request_id, random_number);
-            println!("Received random number: {}", random_number);
-            println!("Concatenated Result: {}", request_id);
-        }
-
+        let client_message: Vec<&str> = json.split(',').collect();
+        let client_id:u64= client_message[0].parse::<u64>().unwrap();
+        let image_id = client_message[1];
         
+        let mut request_id = format!(
+            "{}-{}-{}", 
+            client_addr.ip(),
+            client_addr.port(),
+            image_id
+        );        
         
         let stats_clone = Arc::clone(&stats);
         let client_socket_clone = Arc::clone(&client_socket); // Arc clone, not UdpSocket clone
         
         
         let listen_socket_clone = Arc::clone(&listen_socket);
-        let conn_clone = Arc::clone(&conn);
         tokio::spawn(async move {
             // Determine if this server should act as the coordinator for this request
             let is_coordinator = process_client_request(SERVER_ID, request_id.clone(), client_socket_clone.clone(), stats_clone.clone()).await;
             
             if is_coordinator {
                 println!("This server is elected as coordinator for request {}", request_id);
+                // Client requests for image encryption
                 
-                // Types of Requests
-                // 1. Client Registration
-                if json.contains("register") {
-                    println!("Received request from client {}", String::from_utf8_lossy(&buffer[..size]));
-                    println!("Client registration request received");
-                    let mut dos_conn = conn_clone.lock().await;
-                    let client_addr_clone = client_addr.clone();
-                    let response = register_user(&mut dos_conn, &client_addr_clone.to_string());
-                    println!("Response: {}", response);
-                    let response_bytes = serde_json::to_vec(&response).unwrap();  
-                    println!("This is the client Address I am sending to ------>: {}",client_addr);                
-                    if let Err(e) = async {
-                        listen_socket_clone
-                            .send_to(&response_bytes, client_addr)
-                            .await?;
-                        Ok::<(), io::Error>(()) // Explicitly define the `Result` type
-                    }
-                    .await
-                    {
-                        eprintln!("Error in spawned task: {}", e);
-                    }
+                println!("Client encryption request received");
+                // Send the assigned client port back to the client
+                if let Err(e) = async {
+                    listen_socket_clone
+                    .send_to(&client_port.to_be_bytes(), client_addr)
+                    .await?;
+                    Ok::<(), io::Error>(()) // Explicitly define the `Result` type
                 }
-                
-                // 2. Client Sign-in
-                else if json.contains("sign_in") {
-                    println!("Received request from client {}", String::from_utf8_lossy(&buffer[..size]));
-                    println!("Client sign-in request received");
-                    let json_response: serde_json::Value = match serde_json::from_slice(&buffer[..size]) {
-                        Ok(json) => json,
-                        Err(e) => {
-                            eprintln!("Failed to parse JSON: {}", e);
-                            return;
-                        }
-                    };
-                    let client_id = json_response["user_id"].as_u64().unwrap();
-                    let p2p_socket = json_response["p2p_socket"].as_str().unwrap_or("").to_string();
-
-                    let mut dos_conn = conn_clone.lock().await;
-                    let client_addr_clone = client_addr.clone();
-                    let p2p_socket_clone = p2p_socket.clone();
-
-                    // Split client_addr_clone into IP and port
-                    let client_ip = client_addr_clone.ip().to_string();
-                    
-
-                    // Split p2p_socket_clone into IP and port
-                    let p2p_socket_parts: Vec<&str> = p2p_socket_clone.split(':').collect();
-                    let p2p_port = p2p_socket_parts[1]; // Port from the p2p socket
-
-                    // Concatenate the client_ip with p2p_port to create the new socket address string
-                    let combined_socket_str = format!("{}:{}", client_ip, p2p_port);
-
-                    let response = sign_in_user(&mut dos_conn, &client_id, &combined_socket_str);
-
-                    // name json that has the images and the views the user receveid while he is offlice 
-                    let offline_requests = get_resources_by_client_id(&mut dos_conn, client_id);
-
-                    let mut response_bytes = serde_json::to_vec(&response).unwrap();
-                    if response["status"] == "success"{
-                        response_bytes = serde_json::to_vec(&offline_requests).unwrap();
-                    }
-
-                    if let Err(e) = async {
-                        listen_socket_clone
-                            .send_to(&response_bytes, client_addr)
-                            .await?;
-                        Ok::<(), io::Error>(()) // Explicitly define the `Result` type
-                    }
-                    .await
-                    {
-                        eprintln!("Error in spawned task: {}", e);
-                    }
-                }
-                
-                
-                // 3. Client asks who is up and has what
-                else if json.contains("active_users") {
-                    println!("Client who_is_up request received");
-                    println!("Received request from client {}", String::from_utf8_lossy(&buffer[..size]));
-                    let mut dos_conn = conn_clone.lock().await;
-                    let json_response: serde_json::Value = match serde_json::from_slice(&buffer[..size]) {
-                        Ok(json) => json,
-                        Err(e) => {
-                            eprintln!("Failed to parse JSON: {}", e);
-                            return;
-                        }
-                    };
-                    let client_id = json_response["user_id"].as_u64().unwrap();
-                    let response = get_images_up(&mut dos_conn, &client_id);
-                    println!("Response: {}", response);
-                    let response_bytes = serde_json::to_vec(&response).unwrap();
-                    if let Err(e) = async {
-                        listen_socket_clone
-                            .send_to(&response_bytes, client_addr)
-                            .await?;
-                        Ok::<(), io::Error>(()) // Explicitly define the `Result` type
-                    }
-                    .await
-                    {
-                        eprintln!("Error in spawned task: {}", e);
-                    }
-                }
-
-
-                // 4. Client Shutdown
-                else if json.contains("shutdown") {
-                    println!("Client shutdown request received");
-                    println!("Received request from client {}", String::from_utf8_lossy(&buffer[..size]));
-                    let json_response: serde_json::Value = match serde_json::from_slice(&buffer[..size]) {
-                        Ok(json) => json,
-                        Err(e) => {
-                            eprintln!("Failed to parse JSON: {}", e);
-                            return;
-                        }
-                    };
-                    let client_id = json_response["user_id"].as_u64().unwrap();
-                    let mut dos_conn = conn_clone.lock().await;
-                    let response = shutdown_client(&mut dos_conn, client_id);
-                    println!("Response: {}", response);
-                    let response_bytes = serde_json::to_vec(&response).unwrap();
-                    if let Err(e) = async {
-                        listen_socket_clone
-                            .send_to(&response_bytes, client_addr)
-                            .await?;
-                        Ok::<(), io::Error>(()) // Explicitly define the `Result` type
-                    }
-                    .await
-                    {
-                        eprintln!("Error in spawned task: {}", e);
-                    }
-
-                }
-                // 5. client wants to report that another peer went offline and did not receive the change view request
-                
-                // else if json.contains("change-view") 
-                //     {
-                //         // Parse the incoming JSON
-                //         let parsed_json: serde_json::Value = serde_json::from_str(&json).unwrap();
-                //         println!("Received change view request from client {}", String::from_utf8_lossy(&buffer[..size]));
-
-                //         // Extract required fields from the JSON
-                //         let viewer_IP = parsed_json["peer_address"].as_str().unwrap_or("");
-                //         let image_id = parsed_json["image_id"].as_str().unwrap_or("");
-                //         let views = parsed_json["requested_views"].as_i64().unwrap_or(0) as i32;
-                        
-                //         println!("Viewer IP: {}", viewer_IP);
-                //         println!("Image ID: {}", image_id);
-                //         println!("Requested Views: {}", views);
-
-                //         // Use the add_client_image_entry function to insert into the client_images table
-                //         let mut dos_conn = conn_clone.lock().await;
-                //         let add_entry_response = update_access_rights(&mut dos_conn, viewer_IP, image_id, views);
-
-                //         if add_entry_response["status"] == "failure" {
-                //             println!("Failed to add client image entry: {}", add_entry_response["error"]);
-                //         } else {
-                //             println!("Successfully added client image entry.");
-                //         }
-
-                //         let viewer_id = add_entry_response["viewer_id"].as_u64().unwrap_or(0);
-
-                //         // Use the shutdown_client function to mark the client as offline
-                //         let shutdown_response = shutdown_client(&mut dos_conn, viewer_id);
-
-                //         if shutdown_response["status"] == "failure" {
-                //             println!("Failed to mark client as offline: {}", shutdown_response["error"]);
-                //         } else {
-                //             println!("Successfully marked client as offline.");
-                //         }
-                //     }
-
-                else if json.contains("change-view") 
+                .await
                 {
-                    // Parse the incoming JSON
-                    let parsed_json: serde_json::Value = serde_json::from_str(&json).unwrap();
-                    println!("Received change view request from client {}", String::from_utf8_lossy(&buffer[..size]));
-
-                    // Extract required fields from the JSON
-                    let viewer_IP = parsed_json["peer_address"].as_str().unwrap_or("");
-                    let image_id = parsed_json["image_id"].as_str().unwrap_or("");
-                    let views = parsed_json["requested_views"].as_i64().unwrap_or(0) as i32;
-
-                    // Log missing fields
-                    if viewer_IP.is_empty() {
-                        println!("Warning: peer_address is missing in the request.");
-                    }
-                    else {println!("Viewer IP: {}", viewer_IP)};
-                    if image_id.is_empty() {
-                        println!("Warning: image_id is missing in the request.");
-                    }
-                    else {println!("Image ID: {}", image_id)};
-
-                    if views == 0 {
-                        println!("Warning: requested_views is 0 or missing in the request.");
-                    }
-
-                    println!("Viewer IP: {}", viewer_IP);
-                    println!("Image ID: {}", image_id);
-                    println!("Requested Views: {}", views);
-
-                    // Use the add_client_image_entry function to insert into the client_images table
-                    let mut dos_conn = conn_clone.lock().await;
-                    let add_entry_response = update_access_rights(&mut dos_conn, viewer_IP, image_id, views);
-
-                    if add_entry_response["status"] == "failure" {
-                        println!("Failed to add client image entry: {}", add_entry_response["error"]);
-                    } else {
-                        println!("Successfully added client image entry.");
-                    }
-
-                    // Extract the viewer_id from add_entry_response
-                    let viewer_id = add_entry_response["viewer_id"].as_u64().unwrap_or(0);
-
-                    // Ensure viewer_id is valid before proceeding
-                    if viewer_id == 0 {
-                        println!("Invalid viewer ID: cannot mark client as offline.");
-                    } else {
-                        // Use the shutdown_client function to mark the client as offline
-                        let shutdown_response = shutdown_client(&mut dos_conn, viewer_id);
-
-                        if shutdown_response["status"] == "failure" {
-                            println!("Failed to mark client as offline: {}", shutdown_response["error"]);
-                        } else {
-                            println!("Successfully marked client as offline.");
-                        }
-                    }
+                    eprintln!("Error in spawned task: {}", e);
                 }
-
-
-                // 6. Client requests for image encryption
-                else {
-                   
-                    let client_message: Vec<&str> = json.split(',').collect();
-                    let client_id:u64= client_message[0].parse::<u64>().unwrap();
-                    let image_id = client_message[1];
-                  
-                    println!("Client encryption request received");
-                    // Send the assigned client port back to the client
-                    if let Err(e) = async {
-                        listen_socket_clone
-                        .send_to(&client_port.to_be_bytes(), client_addr)
-                        .await?;
-                        Ok::<(), io::Error>(()) // Explicitly define the `Result` type
-                    }
-                    .await
-                    {
-                        eprintln!("Error in spawned task: {}", e);
-                    }
-                    println!("Allocated port {} for client {}", client_port, client_addr);
-                    
-                    // Coordinator handles the client by invoking `handle_client`
-                    match communication::handle_client(client_socket_clone, client_addr).await {
-                        Ok(_) => {
-                            // Only add the client resource to the dos if no error occurred
-                            let mut dos_conn = conn_clone.lock().await;
-                            insert_into_resources(&mut dos_conn, client_id, &image_id);
-                        }
-                        Err(e) => {
-                            // Log the error if `handle_client` fails
-                            eprintln!("Error handling client {}: {}", client_addr, e);
-                        }
-                    }
-                }
-
+                println!("Allocated port {} for client {}", client_port, client_addr);
                 
-    // No return, function just runs the insert
-    drop(client_socket);
+                // Coordinator handles the client by invoking `handle_client`
+                match communication::handle_client(client_socket_clone, client_addr).await {
+                    Ok(_) => {
+                        // Only add the client resource to the dos if no error occurred
+                        println!("Client request handled successfully");
+                    }
+                    Err(e) => {
+                        // Log the error if `handle_client` fails
+                        eprintln!("Error handling client {}: {}", client_addr, e);
+                    }
+                }    
+                // No return, function just runs the insert
+                drop(client_socket);
                 
             } else {
                 println!("Another server will handle the re10.7.19.18-58052quest {}", request_id);
