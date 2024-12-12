@@ -75,7 +75,9 @@ async fn main() -> io::Result<()> {
 
     // Process each image
     for image_path in image_files {
-        println!("This is the image path: {}", image_path.to_string_lossy());
+        // ----> To add time differences between each image sent <---- //
+        // sleep(Duration::from_secs(5)).await;
+
         // Process each image in a non-blocking manner
         let handle = tokio::spawn(async move {
             // let random_num: i32 = rng.gen();
