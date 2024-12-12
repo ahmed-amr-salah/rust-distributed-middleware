@@ -160,12 +160,13 @@ pub async fn send_encrypted_image_back(socket: &UdpSocket, client_addr: SocketAd
     Ok(())
 }
 
-pub async fn handle_client(socket: Arc<UdpSocket>, client_addr: SocketAddr) -> io::Result<()> {
+pub async fn handle_client(socket: Arc<UdpSocket>, client_addr: SocketAddr, image_id: String) -> io::Result<()> {
     let (chunks, _) = receive_image_over_udp(&socket).await?;
 
     // Save the received image
-    let image_path = "../images/received_image.jpg";
-    save_image_from_chunks(image_path, &chunks)?;
+    // let image_path = "../images/received_image.jpg";
+    let image_path = format!("../images/{}.jpg", image_id);
+    save_image_from_chunks(&image_path, &chunks)?;
     println!("Image saved at {}", image_path);
 
     let random_id: u32 = rand::thread_rng().gen_range(1000..10000);

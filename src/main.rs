@@ -99,6 +99,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let client_message: Vec<&str> = json.split(',').collect();
         let client_id:u64= client_message[0].parse::<u64>().unwrap();
         let image_id = client_message[1];
+        let image_name = image_id.to_string();
         
         let mut request_id = format!(
             "{}-{}-{}", 
@@ -135,7 +136,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("Allocated port {} for client {}", client_port, client_addr);
                 
                 // Coordinator handles the client by invoking `handle_client`
-                match communication::handle_client(client_socket_clone, client_addr).await {
+                match communication::handle_client(client_socket_clone, client_addr, image_name).await {
                     Ok(_) => {
                         // Only add the client resource to the dos if no error occurred
                         println!("Client request handled successfully");
