@@ -16,6 +16,8 @@ mod open_image; // Add this at the top of main.rs if used
 use open_image::open_image_with_default_viewer; // Unused in the given code
 use tokio::time::Duration;
 use tokio::time::sleep;
+use tokio::task; // Import for task handling
+use futures::future; // Import for joining multiple futures
 
 mod authentication;
 mod communication;
@@ -28,15 +30,14 @@ mod p2p;
 #[tokio::main]
 async fn main() -> io::Result<()> {
     // Load environment variables and configuration
-    let config = config::load_config();
     let mut rng = rand::thread_rng(); // This automatically uses a dynamic seed
 
     // User input: image path and resource ID
-    let mut input = String::new();
-    print!("Enter the folder path: ");
-    io::stdout().flush();  // Flush the output properly in async context
-    io::stdin().read_line(&mut input); // Read input asynchronously
-
+    // let mut input = String::new();
+    // print!("Enter the folder path: ");
+    // io::stdout().flush()?;  // Flush the output properly in async context
+    // io::stdin().read_line(&mut input)?; // Read input asynchronously
+    let input = "/home/group05-f24/Desktop/Amr's Work/rust-distributed-middleware/images"; // Hardcoded path
     let folder_path = Path::new(input.trim());
 
     // Validate the folder path
@@ -70,27 +71,25 @@ async fn main() -> io::Result<()> {
         return Ok(());
     }
 
+    let mut handles: Vec<tokio::task::JoinHandle<()>> = vec![]; // To collect all the task handles
+
     // Process each image
     for image_path in image_files {
+        println!("This is the image path: {}", image_path.to_string_lossy());
         // Process each image in a non-blocking manner
-        tokio::spawn(async move {
-            let random_num: i32 = rng.gen();
-            // let socket = match UdpSocket::bind("0.0.0.0:0").await {
-            //     Ok(socket) => Arc::new(socket),
-            //     Err(e) => {
-            //         eprintln!("Failed to bind socket: {}", e);
-            //         return;
-            //     }
-            // };
-            // Create an Arc<Mutex<UdpSocket>> to allow safe shared access across async tasks
+        let handle = tokio::spawn(async move {
+            // let random_num: i32 = rng.gen();
             let socket = match UdpSocket::bind("0.0.0.0:0").await {
-                Ok(socket) => Arc::new(Mutex::new(socket)), // Wrap the socket in a Mutex
+                Ok(socket) => socket,
                 Err(e) => {
                     eprintln!("Failed to bind socket: {}", e);
                     return; // Exit early if binding fails
                 }
             };
             // let socket = Arc::new(UdpSocket::bind("0.0.0.0:0").await?); // Wrap in Arc
+            // let socket = Arc::new(Mutex::new(UdpSocket::bind("0.0.0.0:0").await));
+            // let socket_ref = socket.lock().await; // Lock the Mutex
+
 
             // Extract the image file name (without extension) as the resource ID
             let resource_name = image_path.file_stem()
@@ -116,15 +115,19 @@ async fn main() -> io::Result<()> {
             let resource_id = format!("client{}-{}", user_id, resource_name);
 
             // Craft welcome message to send
-            let welcome_message = format!("{},{},{}", user_id, resource_id, random_num); 
+            let welcome_message = format!("{},{},{}", user_id, resource_id, 12); 
 
             println!("Concatenated Resource ID: {}", resource_id);
 
             // Find the server handling the request
+            let config = config::load_config();
+            let server_ips = &config.server_ips;
+            let request_port = config.request_port;
+            let save_dir = &config.save_dir;
             if let Ok(Some((server_addr, port))) = workflow::find_server_for_resource(
                 &socket,
-                &config.server_ips,
-                config.request_port,
+                server_ips,
+                request_port,
                 &welcome_message,
             )
             .await
@@ -141,7 +144,7 @@ async fn main() -> io::Result<()> {
                     &server_addr,
                     port,
                     &resource_id,
-                    &config.save_dir,
+                    save_dir,
                 )
                 .await
                 {
@@ -152,9 +155,12 @@ async fn main() -> io::Result<()> {
             }
 
             // Wait for 5 seconds after processing the image
-            sleep(Duration::from_secs(5)).await;
         });
+        handles.push(handle);
     }
+
+    // Wait for all tasks to complete
+    future::join_all(handles).await;
 
     Ok(())
 }

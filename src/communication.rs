@@ -23,14 +23,14 @@ pub async fn send_image_over_udp(socket: &UdpSocket, image_path: &Path, dest_ip:
 
         loop {
             socket.send_to(&packet, (dest_ip.as_str(), port)).await?;
-            println!("Sent chunk {}/{}", i + 1, total_chunks);
+            // println!("Sent chunk {}/{}", i + 1, total_chunks);
 
             let mut ack_buf = [0u8; 4];
             match timeout(Duration::from_secs(2), socket.recv_from(&mut ack_buf)).await {
                 Ok(Ok((size, _))) if size == 4 => {
                     let ack_id = u32::from_be_bytes(ack_buf);
                     if ack_id == i as u32 {
-                        println!("Received acknowledgment for chunk {}", i + 1);
+                        // println!("Received acknowledgment for chunk {}", i + 1);
                         break;
                     } else {
                         println!("Mismatched acknowledgment, retrying...");
@@ -67,7 +67,7 @@ pub async fn receive_encrypted_image(socket: &UdpSocket, save_path: &Path) -> io
 
         // Store the received data chunk
         received_chunks.push(buffer[..size].to_vec());
-        println!("Received chunk with size {} bytes", size);
+        // println!("Received chunk with size {} bytes", size);
     }
 
     save_image_from_chunks(save_path, &received_chunks)?;
@@ -82,7 +82,7 @@ fn save_image_from_chunks(path: &Path, chunks: &[Vec<u8>]) -> io::Result<()> {
 
     for (i, chunk) in chunks.iter().enumerate() {
         file.write_all(chunk)?;
-        println!("Saved chunk {} to file", i + 1);
+        // println!("Saved chunk {} to file", i + 1);
     }
 
     Ok(())

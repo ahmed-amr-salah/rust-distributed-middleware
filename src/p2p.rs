@@ -266,7 +266,7 @@ pub async fn receive_encrypted_image_from_client(socket: &UdpSocket) -> io::Resu
         if size >= 4 {
             let chunk_id = u32::from_be_bytes(buffer[..4].try_into().unwrap());
             let data_chunk = &buffer[4..size];
-            println!("Received chunk ID: {} with size {} bytes", chunk_id, data_chunk.len());
+            // println!("Received chunk ID: {} with size {} bytes", chunk_id, data_chunk.len());
 
             // Store the received data chunk
             while received_chunks.len() <= chunk_id as usize {
