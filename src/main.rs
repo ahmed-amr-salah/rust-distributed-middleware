@@ -152,9 +152,6 @@ async fn main() -> io::Result<()> {
                 eprintln!("No server responded to the resource ID. Exiting.");
             }
 
-            // Wait for 5 seconds after processi            // let socket = Arc::new(UdpSocket::bind("0.0.0.0:0").await?); // Wrap in Arc
-            // let socket = Arc::new(Mutex::new(UdpSocket::bind("0.0.0.0:0").await));
-            // let socket_ref = socket.lock().await; // Lock the Mutexng the image
         });
         handles.push(handle);
     }
