@@ -5,7 +5,7 @@ use tokio::net::UdpSocket;
 use tokio::sync::{mpsc, Mutex};
 use serde_json::{json, Value, Map};
 use uuid::Uuid;
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::fs::File;
 use std::collections::VecDeque;
 use rand::{Rng, SeedableRng};
@@ -18,6 +18,8 @@ use tokio::time::Duration;
 use tokio::time::sleep;
 use tokio::task; // Import for task handling
 use futures::future; // Import for joining multiple futures
+use std::time::Instant;
+use tokio::sync::Semaphore;
 
 mod authentication;
 mod communication;
@@ -27,29 +29,23 @@ mod config;
 mod workflow;
 mod p2p;
 
+
 #[tokio::main]
 async fn main() -> io::Result<()> {
-    // Load environment variables and configuration
-    let mut rng = rand::thread_rng(); // This automatically uses a dynamic seed
+    const NUM_ITERATIONS: usize = 100;
+    const MAX_CONCURRENT_TASKS: usize = 10; // Limit concurrency to avoid stack overflow
 
-    // User input: image path and resource ID
-    // let mut input = String::new();
-    // print!("Enter the folder path: ");
-    // io::stdout().flush()?;  // Flush the output properly in async context
-    // io::stdin().read_line(&mut input)?; // Read input asynchronously
-    let input = "/home/group05-f24/Desktop/Amr's Work/rust-distributed-middleware/images"; // Hardcoded path
+    let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_TASKS));
+
+    let input = "/home/group05-f24/Desktop/Amr's Work/rust-distributed-middleware/images";
     let folder_path = Path::new(input.trim());
+    let times_file_path = folder_path.parent().unwrap().join("times.txt");
 
-    // Validate the folder path
-    if !folder_path.exists() {
-        eprintln!("The specified folder path does not exist.");
-        return Ok(());
-    } else if !folder_path.is_dir() {
-        eprintln!("The specified path is not a directory.");
+    if !folder_path.exists() || !folder_path.is_dir() {
+        eprintln!("The specified path is invalid or not a directory.");
         return Ok(());
     }
 
-    // Read all files in the folder
     let image_files: Vec<PathBuf> = fs::read_dir(folder_path)
         .unwrap_or_else(|_| {
             eprintln!("Failed to read the folder.");
@@ -71,94 +67,102 @@ async fn main() -> io::Result<()> {
         return Ok(());
     }
 
-    let mut handles: Vec<tokio::task::JoinHandle<()>> = vec![]; // To collect all the task handles
+    let mut handles = vec![];
 
-    // Process each image
-    for image_path in image_files {
-        // ----> To add time differences between each image sent <---- //
-        // sleep(Duration::from_secs(5)).await;
+    for iteration in 0..NUM_ITERATIONS {
+        for image_path in &image_files {
+            let image_path = image_path.clone();
+            let times_file_path = times_file_path.clone();
+            let semaphore = semaphore.clone();
 
-        // Process each image in a non-blocking manner
-        let handle = tokio::spawn(async move {
-            // let random_num: i32 = rng.gen();
-            let socket = match UdpSocket::bind("0.0.0.0:0").await {
-                Ok(socket) => socket,
-                Err(e) => {
-                    eprintln!("Failed to bind socket: {}", e);
-                    return; // Exit early if binding fails
-                }
-            };
+            let handle = tokio::spawn(async move {
+                // Acquire a permit from the semaphore
+                let _permit = semaphore.acquire().await.unwrap();
 
-            // Extract the image file name (without extension) as the resource ID
-            let resource_name = image_path.file_stem()
-                .and_then(|os_str| os_str.to_str()) // Convert OsStr to str
-                .unwrap_or("unknown") // Fallback if file_stem is invalid
-                .to_string();
+                let start_time = Instant::now();
 
-            let user_id: String = match fs::read_to_string("../user.json") {
-                Ok(contents) => {
-                    let json: serde_json::Value = serde_json::from_str(&contents).unwrap_or_default();
-                    json.get("user_id")
-                        .and_then(|id| id.as_str()) // Convert to &str
-                        .map(|id| id.to_string()) // Convert to String
-                        .unwrap_or_else(|| "0".to_string()) // Fallback to "0" as a String
-                }            // let socket = Arc::new(UdpSocket::bind("0.0.0.0:0").await?); // Wrap in Arc
-            // let socket = Arc::new(Mutex::new(UdpSocket::bind("0.0.0.0:0").await));
-            // let socket_ref = socket.lock().await; // Lock the Mutex
-                Err(_) => {
-                    eprintln!("Failed to read user.json or user_id not found. Using default user_id = 0.");
-                    "0".to_string() // Fallback to "0" as a String
-                }
-            };
+                let socket = match UdpSocket::bind("0.0.0.0:0").await {
+                    Ok(socket) => socket,
+                    Err(e) => {
+                        eprintln!("Failed to bind socket: {}", e);
+                        return;
+                    }
+                };
 
-            // Create the concatenated resource ID
-            let resource_id = format!("client{}-{}", user_id, resource_name);
+                let resource_name = image_path.file_stem()
+                    .and_then(|os_str| os_str.to_str())
+                    .unwrap_or("unknown")
+                    .to_string();
 
-            // Craft welcome message to send
-            let welcome_message = format!("{},{},{}", user_id, resource_id, 12); 
+                let user_id: String = match fs::read_to_string("../user.json") {
+                    Ok(contents) => {
+                        let json: serde_json::Value = serde_json::from_str(&contents).unwrap_or_default();
+                        json.get("user_id")
+                            .and_then(|id| id.as_str())
+                            .map(|id| id.to_string())
+                            .unwrap_or_else(|| "0".to_string())
+                    }
+                    Err(_) => {
+                        eprintln!("Failed to read user.json or user_id not found. Using default user_id = 0.");
+                        "0".to_string()
+                    }
+                };
 
-            println!("Concatenated Resource ID: {}", resource_id);
+                let resource_id = format!("client{}-{}-iter{}", user_id, resource_name, iteration);
 
-            // Find the server handling the request
-            let config = config::load_config();
-            let server_ips = &config.server_ips;
-            let request_port = config.request_port;
-            let save_dir = &config.save_dir;
-            if let Ok(Some((server_addr, port))) = workflow::find_server_for_resource(
-                &socket,
-                server_ips,
-                request_port,
-                &welcome_message,
-            )
-            .await
-            {
-                println!(
-                    "Server {}:{} will handle the request for resource ID {}",
-                    server_addr, port, resource_id
-                );
+                let welcome_message = format!("{},{},{}", user_id, resource_id, 12);
 
-                // Process the single image
-                if let Err(e) = workflow::process_image(
+                println!("Processing resource ID: {}", resource_id);
+
+                let config = config::load_config();
+                let server_ips = &config.server_ips;
+                let request_port = config.request_port;
+                let save_dir = &config.save_dir;
+
+                if let Ok(Some((server_addr, port))) = workflow::find_server_for_resource(
                     &socket,
-                    &image_path,
-                    &server_addr,
-                    port,
-                    &resource_id,
-                    save_dir,
+                    server_ips,
+                    request_port,
+                    &welcome_message,
                 )
                 .await
                 {
-                    eprintln!("Error processing image: {}", e);
-                }
-            } else {
-                eprintln!("No server responded to the resource ID. Exiting.");
-            }
+                    println!(
+                        "Server {}:{} will handle the request for resource ID {}",
+                        server_addr, port, resource_id
+                    );
 
-        });
-        handles.push(handle);
+                    if let Err(e) = workflow::process_image(
+                        &socket,
+                        &image_path,
+                        &server_addr,
+                        port,
+                        &resource_id,
+                        save_dir,
+                    )
+                    .await
+                    {
+                        eprintln!("Error processing image: {}", e);
+                    }
+                } else {
+                    eprintln!("No server responded to the resource ID. Exiting.");
+                }
+
+                let elapsed_time = start_time.elapsed();
+
+                let mut file = OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(times_file_path)
+                    .expect("Failed to open or create times.txt");
+
+                writeln!(file, "{} ms", elapsed_time.as_millis())
+                    .expect("Failed to write to times.txt");
+            });
+            handles.push(handle);
+        }
     }
 
-    // Wait for all tasks to complete
     future::join_all(handles).await;
 
     Ok(())
